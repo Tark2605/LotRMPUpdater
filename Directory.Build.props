@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Company>LotR MP Event team</Company>
+    <Product>LotR MP Event updater</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <!-- Lets the .NET SDK build net48 targets without a Visual Studio / targeting pack install. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

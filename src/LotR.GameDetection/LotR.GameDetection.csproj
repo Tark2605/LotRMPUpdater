@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <RootNamespace>LotR.GameDetection</RootNamespace>
+    <AssemblyName>LotR.GameDetection</AssemblyName>
+    <Description>Finds Mount &amp; Blade II: Bannerlord installations (Steam, Epic, GOG, Xbox PC) and their Modules folder.</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <!-- On .NET Framework these APIs live in mscorlib; on netstandard2.0 they come from Windows-only packages. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
+    <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
+    <PackageReference Include="System.Security.Principal.Windows" Version="5.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="LotR.GameDetection.Tests" />
+  </ItemGroup>
+</Project>
