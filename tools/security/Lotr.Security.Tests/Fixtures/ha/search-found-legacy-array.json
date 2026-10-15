@@ -1,0 +1,1 @@
+[ { "job_id": "5f00aa11bb22cc33dd44ee55", "environment_id": 120, "environment_description": "Windows 7 64 bit", "state": "SUCCESS", "verdict": "whitelisted", "threat_score": null, "analysis_start_time": "2026-01-02T03:04:05+00:00", "sha256": "{SHA256}" } ]

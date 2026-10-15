@@ -1,0 +1,6 @@
+{
+  "Endpoint": "<https://weu.codesigning.azure.net  - the regional endpoint of YOUR Trusted Signing account>",
+  "CodeSigningAccountName": "<your Trusted Signing account name>",
+  "CertificateProfileName": "<your public-trust certificate profile name>",
+  "CorrelationId": "lotrmp-updater"
+}

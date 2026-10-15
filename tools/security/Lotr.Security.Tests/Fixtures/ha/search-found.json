@@ -1,0 +1,7 @@
+{
+  "sha256s": [ "{SHA256}" ],
+  "reports": [
+    { "id": "6712ab34cd56ef7890123456", "environment_id": 160, "environment_description": "Windows 10 64 bit", "state": "SUCCESS", "verdict": "no specific threat", "threat_score": 0, "analysis_start_time": "2026-10-14T10:00:00+00:00" },
+    { "id": "6712ab34cd56ef7890000000", "environment_id": 140, "environment_description": "Windows 11 64 bit", "state": "IN_PROGRESS", "verdict": null }
+  ]
+}

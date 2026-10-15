@@ -1,0 +1,7 @@
+bin/
+obj/
+*.tmp
+# Never commit real secrets or test signing material
+security-api.json
+*.pfx
+*.pfx.password

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    lotr-security: VirusTotal (API v3) + Hybrid Analysis (Falcon Sandbox API v2) scans for a release.
+    net48 on purpose: it runs on the Windows Server next to the publish tool without installing a .NET runtime,
+    and uses the same toolchain as the rest of LOTR/installer (see docs/SECURITY-AUTOMATION.md, "Why a net48 tool").
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>lotr-security</AssemblyName>
+    <RootNamespace>Lotr.Security</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lotr.Security.Tests" />
+  </ItemGroup>
+</Project>

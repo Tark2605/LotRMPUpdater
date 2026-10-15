@@ -1,0 +1,90 @@
+# REVIEW-AFTER(open-source): TEMPLATE, NOT ACTIVE. LOTR/installer is a local-only git repository today
+# (docs/CONTRACTS.md §7). This only becomes usable once the updater source is published in a PUBLIC GitHub
+# repository under an OSI-approved licence and accepted by the SignPath Foundation open-source program
+# (docs/SECURITY-AUTOMATION.md section 5.1). Then copy it to .github/workflows/release-updater.yml.
+#
+# What it does: builds the updater from source on a GitHub-hosted runner (reproducible build settings),
+# uploads the unsigned exe as a workflow artifact, asks SignPath to sign THAT artifact (SignPath checks it came
+# from this repository/workflow/branch = "origin verification"), downloads the signed exe, verifies the signature
+# and publishes the signed exe + its SHA-256 as the workflow output. The release is then copied to the server's
+# files\updater\ folder by the maintainer (or a later deploy step), and scanned with lotr-security.
+#
+# Secrets to create in the GitHub repository (Settings > Secrets and variables > Actions):
+#   SIGNPATH_API_TOKEN        API token of a SignPath "CI user" (submitter role on the project)
+# Variables (not secret):
+#   SIGNPATH_ORGANIZATION_ID  your SignPath organization id (GUID)
+name: release-updater
+
+on:
+  push:
+    tags: [ 'updater-v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read          # SignPath downloads the unsigned artifact through the GitHub API
+
+jobs:
+  build-and-sign:
+    runs-on: windows-2022
+    env:
+      PROJECT: src/LotR.Updater/LotR.Updater.csproj     # REVIEW-AFTER(updater): real project path
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json                # pins the exact SDK (templates/global.json.example)
+
+      - name: Restore (locked)
+        run: dotnet restore $env:PROJECT --locked-mode
+
+      - name: Build (deterministic)
+        run: >
+          dotnet build $env:PROJECT -c Release --no-restore -o out
+          -p:ContinuousIntegrationBuild=true -p:Deterministic=true
+          "-p:PathMap=$env:GITHUB_WORKSPACE\=/_/"
+
+      - name: Hash of the unsigned build (for reproducibility checks)
+        shell: pwsh
+        run: Get-ChildItem out -Include *.exe,*.dll -Recurse | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String -Width 200
+
+      - name: Upload unsigned artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-unsigned
+          path: out/LotRMPUpdater.exe                  # REVIEW-AFTER(updater): real exe name
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: LotRMPUpdater
+          signing-policy-slug: release-signing          # use test-signing until the project is approved
+          artifact-configuration-slug: updater-exe      # an artifact configuration that signs the zipped exe
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem signed -Filter *.exe -Recurse | Select-Object -First 1
+          $s = Get-AuthenticodeSignature $f.FullName
+          "Status: $($s.Status)  Signer: $($s.SignerCertificate.Subject)  Timestamp: $($s.TimeStamperCertificate.Subject)"
+          if ($s.Status -ne 'Valid') { throw "signature invalid: $($s.StatusMessage)" }
+          if (-not $s.TimeStamperCertificate) { throw 'signature not timestamped' }
+          $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$h  $($f.Name)" | Set-Content -NoNewline -Encoding ascii "$($f.FullName).sha256"
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-signed
+          path: signed/
+          if-no-files-found: error

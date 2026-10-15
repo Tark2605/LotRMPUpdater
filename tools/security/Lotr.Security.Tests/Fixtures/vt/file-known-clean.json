@@ -1,0 +1,17 @@
+{
+  "data": {
+    "id": "{SHA256}",
+    "type": "file",
+    "links": { "self": "https://www.virustotal.com/api/v3/files/{SHA256}" },
+    "attributes": {
+      "meaningful_name": "OrderMiddleEarthEvent.dll",
+      "size": 123456,
+      "last_analysis_date": 1791990000,
+      "last_analysis_stats": { "harmless": 0, "type-unsupported": 4, "suspicious": 0, "confirmed-timeout": 0, "timeout": 0, "failure": 0, "malicious": 0, "undetected": 72 },
+      "last_analysis_results": {
+        "Microsoft": { "category": "undetected", "engine_name": "Microsoft", "engine_version": "1.1.24090.11", "result": null, "method": "blacklist" },
+        "Kaspersky": { "category": "undetected", "engine_name": "Kaspersky", "engine_version": "22.0.1.28", "result": null, "method": "blacklist" }
+      }
+    }
+  }
+}

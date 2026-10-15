@@ -1,0 +1,5 @@
+{
+  "data": { "id": "{ANALYSIS_ID}", "type": "analysis",
+    "attributes": { "date": 1791990100, "status": "queued", "stats": { "harmless": 0, "malicious": 0, "suspicious": 0, "undetected": 0, "timeout": 0 }, "results": {} } },
+  "meta": { "file_info": { "sha256": "{SHA256}", "size": 2048 } }
+}

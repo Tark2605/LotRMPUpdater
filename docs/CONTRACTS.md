@@ -13,6 +13,7 @@ files\                         player downloads, never touched by site deploys (
     <releaseId>\               releaseId = "<yyyyMMdd-HHmmss>-<moduleSet short hash>"
       manifest.json            the release manifest (section 2)
       manifest.json.sig        detached signature of manifest.json bytes (section 3)
+      security.json            scan results sidecar (VirusTotal / Hybrid Analysis), NOT signed, updated async (DECIDED 15/10)
       objects\<sha256[0:2]>\<sha256>.<ext>   content-addressed payload, ext = transport (OPEN: compression)
   updater\
     LotRMPUpdater-<version>.exe   the Windows utility (+ .sha256)
@@ -113,3 +114,13 @@ never stored or downloaded twice (file-level delta). Transport encoding of objec
 - `LOTR/installer` (updater, publish tool, services, docs) and `LOTR/site` (pages, admin screen): local git only,
   never pushed; agents do NOT commit — the coordinator does.
 - Never touch the team repo clone except read-only. Game installs are read-only except in tests' temp folders.
+
+## 8. Decisions log
+- 15/10: scan results live ONLY in the unsigned sidecar `fileseleases\<id>\security.json` (format = output of
+  `lotr-security manifest-block`, keys `virustotal`, `hybridAnalysis`); the signed manifest.json carries no `security`
+  block (no re-signing after async scans). The site and the updater read the sidecar; absence never blocks install.
+- 15/10: single secrets folder on the server: `<root>\data\secrets\` (signing key, VirusTotal/Hybrid Analysis keys,
+  services shared secret), ACL SYSTEM + Administrators.
+- 15/10: support queue adds `POST /api/queue/heartbeat { "token" }` (extends slot TTL, 180 s without heartbeat = released).
+- 15/10: agents must NEVER run bot scripts or anything reading a real .env / real API keys (incident: Discord slash
+  commands re-registered on the live guild). Tests use mocks only.

@@ -1,0 +1,23 @@
+<!--
+  REVIEW-AFTER(updater): settings that make the updater build byte-for-byte reproducible.
+  Proposed for the repository's Directory.Build.props (owned by the coordinator), or import it from the updater
+  project:  <Import Project="..\..\tools\security\templates\Reproducible.props" />
+  Verified with tools\security\repro\Test-ReproducibleBuild.ps1 (two different build folders, same hashes).
+-->
+<Project>
+  <PropertyGroup>
+    <!-- Same inputs => same bytes (no timestamp / random MVID in the PE). Already true in Directory.Build.props. -->
+    <Deterministic>true</Deterministic>
+    <!-- Normalises paths embedded in PDB/PE; on a CI runner it is set by the workflow too. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true' Or '$(LOTR_REPRO)' == 'true'">true</ContinuousIntegrationBuild>
+    <!-- Absolute source folder replaced by "/_/" so the build folder never changes the output. -->
+    <PathMap Condition="'$(PathMap)' == ''">$(MSBuildThisFileDirectory)..\..\..\=/_/</PathMap>
+    <!-- Pin every NuGet version: packages.lock.json committed, restore fails if it would change. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+    <!-- No git commit hash in the informational version: building from a source zip gives the same bytes. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- Portable PDB embedded or separate both fine; keep separate so the shipped exe is smaller. -->
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+</Project>

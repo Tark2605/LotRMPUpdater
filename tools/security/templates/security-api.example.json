@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to %ProgramData%\\LotRMP\\secrets\\security-api.json (OUTSIDE any git repo), replace the placeholders, then run tools\\security\\Initialize-SecretsFile.ps1 to restrict the ACL. Never commit the real file.",
+  "virustotal": { "apiKey": "<PUT-YOUR-VIRUSTOTAL-API-KEY-HERE>" },
+  "hybridAnalysis": { "apiKey": "<PUT-YOUR-HYBRID-ANALYSIS-API-KEY-HERE>" }
+}

@@ -1,0 +1,16 @@
+{
+  "data": {
+    "id": "{SHA256}",
+    "type": "file",
+    "attributes": {
+      "last_analysis_date": 1791990000,
+      "last_analysis_stats": { "harmless": 0, "type-unsupported": 3, "suspicious": 1, "timeout": 1, "failure": 0, "malicious": 2, "undetected": 68 },
+      "last_analysis_results": {
+        "Microsoft": { "category": "undetected", "engine_name": "Microsoft", "result": null },
+        "SomeAV": { "category": "malicious", "engine_name": "SomeAV", "result": "Trojan.Generic.Heur" },
+        "OtherAV": { "category": "malicious", "engine_name": "OtherAV", "result": "ML.Attribute.HighConfidence" },
+        "ThirdAV": { "category": "suspicious", "engine_name": "ThirdAV", "result": "Suspicious.Downloader" }
+      }
+    }
+  }
+}

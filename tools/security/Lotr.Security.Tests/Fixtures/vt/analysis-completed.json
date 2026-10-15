@@ -1,0 +1,7 @@
+{
+  "data": { "id": "{ANALYSIS_ID}", "type": "analysis",
+    "attributes": { "date": 1791990200, "status": "completed",
+      "stats": { "harmless": 0, "type-unsupported": 5, "suspicious": 0, "confirmed-timeout": 0, "timeout": 0, "failure": 0, "malicious": 0, "undetected": 71 },
+      "results": { "Microsoft": { "category": "undetected", "engine_name": "Microsoft", "result": null } } } },
+  "meta": { "file_info": { "sha256": "{SHA256}", "size": 2048 } }
+}
