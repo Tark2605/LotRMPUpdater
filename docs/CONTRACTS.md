@@ -19,8 +19,18 @@ files\                         player downloads, never touched by site deploys (
     latest.json                { "version", "url", "sha256", "size", "releasedAt", "signed": bool }
 ```
 Objects are content-addressed by the SHA-256 of the UNCOMPRESSED file, so unchanged files between releases are
-never stored or downloaded twice (file-level delta). Transport encoding of objects: **OPEN (compression study,
-docs/COMPRESSION.md)** — until decided, objects are stored raw with ext `.raw`.
+never stored or downloaded twice (file-level delta). Transport encoding of objects: **DECIDED 15/10
+(docs/COMPRESSION.md)**:
+- `.zst`: zstd level 19, windowLog <= 27 (`--long=27`), single frame with content size + checksum. Decoder:
+  ZstdSharp.Port (MIT, managed) `DecompressionStream` with `ZSTD_d_windowLogMax = 27`; SHA-256 computed on the
+  decoded bytes while copying.
+- `.raw`: stored as is when zstd saves < 3 %.
+- `.zpatch`: reserved (phase 2: zstd --patch-from binary patches for 64 KB-64 MB edited files).
+- Files >= 16 MiB (Core .tpac packs, big scenes): `"chunked": true` + `"chunkIndex": "<sha256>.zst"`; content-defined
+  chunks FastCDC avg 256 KiB / min 64 KiB / max 1 MiB; each chunk is an object (`.zst`/`.raw`) addressed by the
+  SHA-256 of its uncompressed bytes; the chunk index lists ordered {sha256, size, object}. Only chunks missing
+  locally are downloaded. FastCDC ported in-house (~100 lines) with pinned test vectors.
+- Objects are plain static files: no Caddy `encode`/`precompressed` on /files/releases (Range/ETag resume).
 
 ## 2. manifest.json (UTF-8, LF, canonical: keys sorted, no insignificant whitespace when signed)
 
