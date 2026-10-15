@@ -124,3 +124,6 @@ never stored or downloaded twice (file-level delta). Transport encoding of objec
 - 15/10: support queue adds `POST /api/queue/heartbeat { "token" }` (extends slot TTL, 180 s without heartbeat = released).
 - 15/10: agents must NEVER run bot scripts or anything reading a real .env / real API keys (incident: Discord slash
   commands re-registered on the live guild). Tests use mocks only.
+- 15/10 (from workstream C, accepted): `manifest.json.sig` = `{"schema":1,"signatures":[{"alg":"ES256","keyId":"<fingerprint>","sig":"<base64 DER or P1363 as documented in docs/MANIFEST.md>"}]}`; several signatures allowed (key rotation); the updater accepts the release if ANY signature verifies with a trusted key.
+- 15/10 (accepted): chunk index rows are compact arrays `[sha256, size, objectSize, ext]` in file order; a chunked file entry has `chunked: true`, `chunkIndex`, no `object`, and `objectSize` = bytes of its distinct chunks. Objects stay inside each release folder (NTFS hard links between releases); no shared pool.
+- 15/10: anti-rollback: the updater checks the signed `channel` and refuses a manifest with an older `publishedAt` than the installed one unless the player explicitly chose "roll back".

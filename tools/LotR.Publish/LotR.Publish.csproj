@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net48: present on every Windows Server/10/11, no runtime to install on the server. -->
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>lotr-publish</AssemblyName>
+    <RootNamespace>LotR.Publish</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- level-19 zstd contexts are big: keep server GC with concurrent workers. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LotR.Releases\LotR.Releases.csproj" />
+  </ItemGroup>
+</Project>

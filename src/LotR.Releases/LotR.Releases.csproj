@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <RootNamespace>LotR.Releases</RootNamespace>
+    <AssemblyName>LotR.Releases</AssemblyName>
+    <Description>Release manifests for the LotR MP Event updater: model, canonical JSON, ECDSA P-256 signatures, module/scene readers, hashing, publish, verification and download planning.</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <!-- On .NET Framework DPAPI and file ACLs live in System.Security / mscorlib; on netstandard2.0 they come from Windows-only packages. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="4.7.0" />
+    <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
+    <PackageReference Include="System.Security.Principal.Windows" Version="5.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Security" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- zstd transport (CONTRACTS §1, docs/COMPRESSION.md): MIT, pure managed, no native DLL. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="LotR.Releases.Tests" />
+  </ItemGroup>
+</Project>
