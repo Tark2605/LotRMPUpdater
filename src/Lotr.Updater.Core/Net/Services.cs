@@ -167,8 +167,17 @@ namespace Lotr.Updater.Core.Net
             }
         }
 
-        /// <summary>From the last grant (heartbeatSec, capped to 60 s as lotr-services asks).</summary>
-        public TimeSpan HeartbeatInterval { get; private set; } = TimeSpan.FromSeconds(60);
+        private TimeSpan _heartbeat = TimeSpan.FromSeconds(60);
+
+        /// <summary>From the last grant (heartbeatSec, between 5 and 60 s; lotr-services answers TTL/3 = 60 s).</summary>
+        public TimeSpan HeartbeatInterval
+        {
+            get => HeartbeatIntervalOverride ?? _heartbeat;
+            private set => _heartbeat = value;
+        }
+
+        /// <summary>Tests and rehearsals with a very short slot TTL only (never set by the app).</summary>
+        public TimeSpan? HeartbeatIntervalOverride { get; set; }
 
         /// <summary>Keeps the slot alive (CONTRACTS §8, 15/10). False when the server says the slot expired (410).</summary>
         public async Task<bool> HeartbeatAsync(string token, CancellationToken ct)
@@ -206,8 +215,9 @@ namespace Lotr.Updater.Core.Net
         public string ExpiresAt { get; set; }
     }
 
-    /// <summary>POST /api/support (CONTRACTS §4). The log is masked BEFORE this is called.</summary>
-    // REVIEW-AFTER(services): exact behaviour of the lotr-services endpoint (errors, rate-limit body) is not implemented yet.
+    /// <summary>POST /api/support (CONTRACTS §4). The log is masked BEFORE this is called. Answers as lotr-services sends
+    /// them: 200 {code, expiresAt}, 429 {error:"rate_limited", retryAfter}, 4xx {error, message} (checked by the rehearsal,
+    /// tools/rehearsal/Run-Rehearsal.ps1, against the real service).</summary>
     public sealed class SupportClient
     {
         private readonly HttpFetcher _fetch;
@@ -233,6 +243,11 @@ namespace Lotr.Updater.Core.Net
                 {
                     if (resp.StatusCode == (HttpStatusCode)429)
                         throw new HttpFetchException("Too many support requests from this PC in the last hour. Please wait a little, or copy the log by hand into your ticket.", resp.StatusCode);
+                    // lotr-services answers {"error": "<code>", "message": "<text>"} for refused uploads (400, 413, ...).
+                    string detail = null;
+                    try { var e = Json.Json.ParseObject(b); detail = e.Str("message") ?? e.Str("error"); } catch (FormatException) { }
+                    if ((int)resp.StatusCode >= 400 && (int)resp.StatusCode < 500)
+                        throw new HttpFetchException("The support service refused the log (" + (int)resp.StatusCode + (detail != null ? ": " + detail : "") + ").", resp.StatusCode);
                     return Task.FromResult(false);
                 }).ConfigureAwait(false);
             }

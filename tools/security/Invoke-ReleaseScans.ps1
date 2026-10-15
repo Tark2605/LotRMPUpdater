@@ -9,8 +9,8 @@
     4. lotr-security manifest-block                                                   -> printed for the publish tool
     Services without an API key are skipped with a message (exit 0). Exit code 3 = run again later (quota or an
     analysis still running); progress is saved, re-running the same command resumes.
-    REVIEW-AFTER(publish-cli): the publish tool / admin "Modules" screen should call this after publication and merge
-    the printed block into manifest.security (then re-sign the manifest, see docs/SECURITY-AUTOMATION.md §3.4).
+    The results stay in the unsigned sidecar security.json (CONTRACTS section 8, 15/10): the signed manifest is never
+    changed. lotr-publish runs this script after "publish --scan" (or "scan <releaseDir>").
 
 .EXAMPLE
     .\Invoke-ReleaseScans.ps1 -ReleaseDir C:\www\lotrmp\files\releases\20261015-140000-a1b2c3d4 `
@@ -30,6 +30,7 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Exe) {
     $Exe = @(
+        (Join-Path $here 'lotr-security.exe'),  # deployed: <Root>\tools\lotr-security\ (site deploy package)
         (Join-Path $here 'Lotr.Security\bin\Release\net48\lotr-security.exe'),
         (Join-Path $here 'Lotr.Security\bin\Debug\net48\lotr-security.exe')
     ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -54,7 +55,7 @@ if ($UpdaterExe) {
 }
 
 if (Test-Path -LiteralPath $out) {
-    Write-Host "`nManifest security block (docs/CONTRACTS.md §2):"
+    Write-Host "`nManifest security block (docs/CONTRACTS.md section 2):"
     & $Exe manifest-block --in $out
 }
 

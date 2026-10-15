@@ -12,8 +12,10 @@ namespace LotR.GameDetection
         /// <param name="maskUserName">Replaces the Windows user name in paths by "&lt;user&gt;" (for support logs).</param>
         public static string Serialize(DetectionReport r, bool maskUserName = false, string toolVersion = null)
         {
-            string userName = maskUserName ? Environment.UserName : null;
-            string P(string s) => Mask(s, userName);
+            // The user name, the profile folder name (it can differ from the user name) and its 8.3 short form
+            // (C:\Users\UTILSA~1, which Windows puts in %TEMP% and in some shortcuts) are all masked.
+            var names = maskUserName ? UserNamesToMask() : new List<string>();
+            string P(string s) => maskUserName ? MaskAll(s, names) : s;
 
             var root = new Dictionary<string, object>
             {
@@ -69,6 +71,56 @@ namespace LotR.GameDetection
             Write(sb, root, 0);
             sb.Append('\n');
             return sb.ToString();
+        }
+
+        /// <summary>User name, profile folder name and its 8.3 short name (distinct, at least 2 characters).</summary>
+        internal static List<string> UserNamesToMask()
+        {
+            var names = new List<string>();
+            void Add(string n)
+            {
+                if (!string.IsNullOrEmpty(n) && n.Length >= 2 && !names.Contains(n, StringComparer.OrdinalIgnoreCase))
+                    names.Add(n);
+            }
+            Add(Environment.UserName);
+            try
+            {
+                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrEmpty(profile))
+                {
+                    Add(System.IO.Path.GetFileName(profile.TrimEnd('\\')));
+                    var shortProfile = ShortPath(profile);
+                    if (shortProfile != null) Add(System.IO.Path.GetFileName(shortProfile.TrimEnd('\\')));
+                }
+            }
+            catch (Exception) { /* falls back to the user name and the generic 8.3 pattern */ }
+            return names;
+        }
+
+        private static string ShortPath(string path)
+        {
+            try
+            {
+                var sb = new StringBuilder(520);
+                uint n = Windows.NativeMethods.GetShortPathNameW(path, sb, (uint)sb.Capacity);
+                return n == 0 || n >= sb.Capacity ? null : sb.ToString();
+            }
+            catch (Exception) { return null; } // not Windows, or 8.3 names disabled
+        }
+
+        /// <summary>Masks every name as a path segment, then any remaining 8.3 profile folder.</summary>
+        internal static string MaskAll(string s, IEnumerable<string> names)
+        {
+            if (s == null) return null;
+            foreach (var n in names) s = Mask(s, n);
+            return MaskShortProfile(s);
+        }
+
+        /// <summary>An 8.3 short folder directly under Users (\Users\ABCDEF~1) becomes \Users\&lt;user&gt;.</summary>
+        internal static string MaskShortProfile(string s)
+        {
+            if (s == null) return null;
+            return System.Text.RegularExpressions.Regex.Replace(s, @"(?i)([\\/]Users[\\/])[^\\/\s""~]{1,6}~\d{1,3}(?=[\\/""\s]|$)", "$1<user>");
         }
 
         internal static string Mask(string s, string userName)

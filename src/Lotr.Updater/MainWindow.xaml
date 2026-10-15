@@ -99,6 +99,13 @@
         <ScrollViewer Grid.Row="1" Grid.Column="1" Style="{StaticResource PageScroll}" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Home}">
             <StackPanel MaxWidth="900" HorizontalAlignment="Left">
                 <TextBlock Style="{StaticResource Kicker}" Text="THE WEEKLY BATTLE OF MIDDLE-EARTH"/>
+                <Border Background="#12C9A45C" BorderBrush="{StaticResource Gold}" BorderThickness="2,0,0,0" Padding="14,10" Margin="0,4,0,14"
+                        Visibility="{Binding UpdaterUpdateReady, Converter={StaticResource Vis}}">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Command="{Binding RestartToUpdateCommand}" Content="Restart now" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding UpdaterUpdateText}" Style="{StaticResource Body}" FontSize="14" VerticalAlignment="Center"/>
+                    </DockPanel>
+                </Border>
                 <Border x:Name="statusBar" BorderThickness="3,0,0,0" Padding="20,4,0,4" Margin="0,4,0,20">
                     <Border.Style>
                         <Style TargetType="Border">
@@ -392,6 +399,17 @@
                 </Border>
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="START WITH WINDOWS"/>
+                        <CheckBox IsChecked="{Binding StartWithWindows}">
+                            <TextBlock Style="{StaticResource Body}" Text="Start this app with Windows, minimised to the notification area, so new releases are downloaded in advance even when you have not opened it. A notification tells you when an update is ready; installing still waits for your click. Off by default."/>
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap">
+                            <Run Text="How: one shortcut in your own Startup folder ("/><Run Text="{Binding StartupShortcutPath, Mode=OneWay}"/><Run Text="). No registry Run key, no scheduled task, no service. Untick here, delete that shortcut, or turn it off in Task Manager › Startup apps. While it is on, closing the window keeps the app in the notification area (right-click › Exit to quit)."/>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
                         <TextBlock Style="{StaticResource H2}" Text="BACKUP AND REMOVAL"/>
                         <TextBlock Style="{StaticResource Body}" Text="Files replaced by the last update are kept until the next one." Margin="0,0,0,10"/>
                         <StackPanel Orientation="Horizontal">
@@ -409,7 +427,7 @@
                 <TextBlock Style="{StaticResource Kicker}" Text="TRANSPARENCY"/>
                 <TextBlock Style="{StaticResource Title}" Text="What this app does — and does not"/>
                 <TextBlock Style="{StaticResource Lead}" Margin="0,0,0,18"
-                           Text="It keeps the LotR MP Event mod files identical to the release the team signed. It needs no administrator rights, installs no service, runs only while its window is open, and sends no telemetry."/>
+                           Text="It keeps the LotR MP Event mod files identical to the release the team signed. It needs no administrator rights, installs no service, runs only while its window (or, if you chose &quot;Start with Windows&quot;, its notification-area icon) is open, and sends no telemetry."/>
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Style="{StaticResource H2}" Text="FOLDERS IT TOUCHES"/>
@@ -452,11 +470,27 @@
                 </Border>
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="UPDATES OF THIS APP"/>
+                        <TextBlock Style="{StaticResource Body}" Text="The app reads files/updater/latest.json on the same server. A newer version is downloaded next to it, checked (its SHA-256, the team's signature of latest.json, and — once the app is code-signed — that the new exe is signed by the same publisher), and only replaces this one the next time the app starts. The previous version is kept so you can go back."/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0" Visibility="{Binding PreviousUpdaterVersion, Converter={StaticResource Vis}}">
+                            <Button Command="{Binding RollbackUpdaterCommand}" Content="Go back to the previous version"/>
+                            <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"><Run Text="kept: "/><Run Text="{Binding PreviousUpdaterVersion, Mode=OneWay}"/></TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
                         <TextBlock Style="{StaticResource H2}" Text="LICENCE AND VERSION"/>
                         <TextBlock Style="{StaticResource Body}">
                             <Run Text="LotRMPUpdater"/> <Run Text="{Binding AppVersion, Mode=OneWay}"/><Run Text=" · made by the LotR MP Event team for its players · source available on request from the team."/>
                         </TextBlock>
                         <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" Text="Includes ZstdSharp (MIT licence, © Oleg Stepanischev). Mount &amp; Blade II: Bannerlord is a trademark of TaleWorlds Entertainment; this is a fan project, not affiliated with TaleWorlds."/>
+                        <Expander Margin="0,10,0,0" Foreground="{StaticResource Dust}">
+                            <Expander.Header>
+                                <TextBlock Style="{StaticResource Muted}" Text="Fonts: Cinzel (© The Cinzel Project Authors) and Cormorant Garamond (© The Cormorant Project Authors), SIL Open Font License 1.1 — show the licence"/>
+                            </Expander.Header>
+                            <TextBox Style="{StaticResource LogBox}" Text="{Binding FontLicences, Mode=OneWay}" Height="220" Margin="0,8,0,0"/>
+                        </Expander>
                     </StackPanel>
                 </Border>
             </StackPanel>

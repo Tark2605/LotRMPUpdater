@@ -23,6 +23,13 @@ namespace Lotr.Updater.Core.Model
 
         public string Home { get; }
         public string AppDir => Path.Combine(Home, "app");
+        /// <summary>The installed copy of the updater (what the Start menu and the Startup shortcut run).</summary>
+        public string InstalledExe => Path.Combine(AppDir, "LotRMPUpdater.exe");
+        /// <summary>The previous updater, kept after a self-update for rollback.</summary>
+        public string PreviousExe => Path.Combine(AppDir, "LotRMPUpdater.old.exe");
+        /// <summary>Downloaded, verified new updater waiting for the next start.</summary>
+        public string UpdateDir => Path.Combine(AppDir, "update");
+        public string PendingUpdateFile => Path.Combine(UpdateDir, "pending.json");
         public string ObjectCache => Path.Combine(Home, "cache", "objects");
         public string HashCacheFile => Path.Combine(Home, "cache", "hashes.json");
         public string LogDir => Path.Combine(Home, "logs");
@@ -52,6 +59,8 @@ namespace Lotr.Updater.Core.Model
         public string LastCheckUtc { get; set; }
         /// <summary>Release id the player explicitly accepted as a rollback (CONTRACTS §8).</summary>
         public string AllowRollbackTo { get; set; }
+        /// <summary>Updater version the player rolled back from: never offered again (a newer one is).</summary>
+        public string SkippedUpdaterVersion { get; set; }
 
         public static UpdaterState Load(string file)
         {
@@ -75,6 +84,7 @@ namespace Lotr.Updater.Core.Model
                     PendingDownloaded = o.Bool("pendingDownloaded"),
                     LastCheckUtc = o.Str("lastCheckUtc"),
                     AllowRollbackTo = o.Str("allowRollbackTo"),
+                    SkippedUpdaterVersion = o.Str("skippedUpdaterVersion"),
                 };
                 return s;
             }
@@ -103,6 +113,7 @@ namespace Lotr.Updater.Core.Model
                 ["pendingDownloaded"] = PendingDownloaded,
                 ["lastCheckUtc"] = LastCheckUtc,
                 ["allowRollbackTo"] = AllowRollbackTo,
+                ["skippedUpdaterVersion"] = SkippedUpdaterVersion,
             };
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             var tmp = file + ".tmp";

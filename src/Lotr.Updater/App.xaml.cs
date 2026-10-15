@@ -7,10 +7,12 @@ namespace Lotr.Updater
     public partial class App : Application
     {
         private readonly StartOptions _options;
+        private readonly SingleInstance _instance;
 
-        public App(StartOptions options)
+        public App(StartOptions options, SingleInstance instance = null)
         {
             _options = options;
+            _instance = instance;
             DispatcherUnhandledException += OnUnhandled;
         }
 
@@ -23,9 +25,19 @@ namespace Lotr.Updater
                 Shutdown(2);
                 return;
             }
-            Window w = _options.Uninstall ? (Window)new UninstallWindow(_options) : new MainWindow(_options);
+            if (_options.Uninstall)
+            {
+                var u = new UninstallWindow(_options);
+                MainWindow = u;
+                u.Show();
+                return;
+            }
+            var w = new MainWindow(_options);
             MainWindow = w;
-            w.Show();
+            // Another start of the app (Start menu, shortcut) brings this window back instead of running twice.
+            _instance?.ListenForShow(() => Dispatcher.BeginInvoke(new Action(w.ShowFromTray)));
+            if (_options.Minimized && _options.TourDir == null) w.StartInTray(); // "Start with Windows": no window, tray icon only
+            else w.Show();
         }
 
         private static void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)

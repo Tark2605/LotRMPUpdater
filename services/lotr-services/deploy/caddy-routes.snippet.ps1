@@ -1,4 +1,4 @@
-# REVIEW-AFTER(deploy-wiring): ready-to-merge fragment for site\deploy\package\lib\SiteDeploy.Services.ps1.
+# Reference copy: merged into site\deploy\package\lib\SiteDeploy.Services.ps1 by the site deploy pass (15/10).
 # Not a standalone script. See DEPLOY.md ("Caddy routes") for where each part goes.
 
 # --- (1) Next to the other module constants ($script:KumaPort ...):

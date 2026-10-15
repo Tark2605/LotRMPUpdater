@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -54,6 +55,21 @@ namespace Lotr.Updater.Testing
         public int QueueSlotsGranted;
         public int QueueSlotsReleased;
         public int Heartbeats;
+        /// <summary>When set, slots behave like lotr-services: a slot dies this long after its grant or last heartbeat
+        /// (heartbeat on a dead slot = 410), and <see cref="EnforceSlots"/> refuses Core objects without a live slot.</summary>
+        public TimeSpan? SlotTtl { get; set; }
+        public bool EnforceSlots { get; set; }
+        public int ForbiddenObjectRequests;
+        public int ExpiredHeartbeats;
+        private readonly ConcurrentDictionary<string, DateTime> _slotSeen = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        public int LiveSlots => _slotSeen.Count(kv => !SlotExpired(kv.Key));
+
+        public bool SlotExpired(string token) =>
+            !_slotSeen.TryGetValue(token ?? "", out var seen) || (SlotTtl.HasValue && DateTime.UtcNow - seen > SlotTtl.Value);
+
+        /// <summary>Kills a slot now (as if the server restarted or the TTL passed).</summary>
+        public void ExpireAllSlots() => _slotSeen.Clear();
         /// <summary>0 = full speed.</summary>
         public int ThrottleBytesPerSecond { get; set; }
         public string LastSupportBody { get; private set; }
@@ -100,6 +116,14 @@ namespace Lotr.Updater.Testing
                 }
                 if (path.StartsWith("/api/", StringComparison.Ordinal)) { Api(ctx, path); return; }
                 if (!path.StartsWith("/files/", StringComparison.Ordinal)) { NotFound(ctx); return; }
+                var slotToken = ctx.Request.QueryString["slot"];
+                if (EnforceSlots && slotToken != null && SlotExpired(slotToken))
+                {
+                    Interlocked.Increment(ref ForbiddenObjectRequests);
+                    ctx.Response.StatusCode = 403;
+                    ctx.Response.Close();
+                    return;
+                }
                 var rel = Uri.UnescapeDataString(path.Substring("/files/".Length)).Replace('/', Path.DirectorySeparatorChar);
                 var file = Path.GetFullPath(Path.Combine(_root, rel));
                 if (!file.StartsWith(_root, StringComparison.OrdinalIgnoreCase) || !File.Exists(file)) { NotFound(ctx); return; }
@@ -155,11 +179,21 @@ namespace Lotr.Updater.Testing
                 int n = Interlocked.Increment(ref _queueAsked);
                 if (n <= QueueBusyAnswers) { Json(ctx, 429, "{\"position\":" + (QueueBusyAnswers - n + 1) + ",\"retryAfter\":1}"); return; }
                 Interlocked.Increment(ref QueueSlotsGranted);
-                Json(ctx, 200, "{\"token\":\"tok-" + n + "\",\"expiresAt\":\"" + DateTime.UtcNow.AddMinutes(30).ToString("o") + "\"}");
+                _slotSeen["tok-" + n] = DateTime.UtcNow;
+                var ttl = SlotTtl ?? TimeSpan.FromMinutes(30);
+                Json(ctx, 200, "{\"token\":\"tok-" + n + "\",\"expiresAt\":\"" + DateTime.UtcNow.Add(ttl).ToString("o") + "\",\"heartbeatSec\":" + Math.Max(1, (int)(ttl.TotalSeconds / 3)) + "}");
                 return;
             }
-            if (path == "/api/queue/heartbeat") { Interlocked.Increment(ref Heartbeats); Json(ctx, 200, "{}"); return; }
-            if (path == "/api/queue/release") { Interlocked.Increment(ref QueueSlotsReleased); Json(ctx, 200, "{}"); return; }
+            if (path == "/api/queue/heartbeat")
+            {
+                Interlocked.Increment(ref Heartbeats);
+                var token = TokenOf(body);
+                if (SlotExpired(token)) { _slotSeen.TryRemove(token ?? "", out _); Interlocked.Increment(ref ExpiredHeartbeats); Json(ctx, 410, "{\"error\":\"slot_expired\"}"); return; }
+                _slotSeen[token] = DateTime.UtcNow;
+                Json(ctx, 200, "{\"expiresAt\":\"" + DateTime.UtcNow.Add(SlotTtl ?? TimeSpan.FromMinutes(30)).ToString("o") + "\"}");
+                return;
+            }
+            if (path == "/api/queue/release") { Interlocked.Increment(ref QueueSlotsReleased); _slotSeen.TryRemove(TokenOf(body) ?? "", out _); Json(ctx, 200, "{}"); return; }
             if (path == "/api/support")
             {
                 LastSupportBody = body;
@@ -167,6 +201,12 @@ namespace Lotr.Updater.Testing
                 return;
             }
             NotFound(ctx);
+        }
+
+        private static string TokenOf(string body)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(body ?? "", @"""token""\s*:\s*""([^""]*)""");
+            return m.Success ? m.Groups[1].Value : null;
         }
 
         private static void Json(HttpListenerContext ctx, int status, string json)

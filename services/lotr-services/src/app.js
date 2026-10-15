@@ -14,6 +14,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const { DownloadQueue } = require('./queue');
 const { SupportStore, RateLimiter, maskUserPaths, summariseLog, validateSubmission, normaliseCode } = require('./support');
 const { clientIp, isLoopback, isProxied, sendJson, readJson, HttpError, safeEqual } = require('./http-util');
@@ -91,12 +92,35 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
     const advisory = { checks: 0, missing: 0, invalid: 0 };
 
     // Object names ("<sha256>.raw") of the files of role "core" modules, read from every published manifest under
-    // files\releases (CONTRACTS sections 1-2). Refreshed by the periodic sweep. Unknown objects count as core:
-    // the check fails closed in "enforce" mode only for objects it cannot place.
+    // files\releases (CONTRACTS sections 1-2). Chunked files (>= 16 MiB) have no "object": their chunk index
+    // ("chunkIndex", a small .zst) is read too, and its chunks are core objects of a core module. The chunk index itself
+    // never needs a slot: the updater reads it while PLANNING, before it asks for one. Refreshed by the periodic sweep,
+    // and at most every 5 s when an unknown object is asked for (a release published since). Unknown objects count as
+    // core: the check fails closed in "enforce" mode only for objects it cannot place.
+    const chunkIndexCache = new Map();
+    const readChunkIndex = (releaseDir, name) => {
+        if (chunkIndexCache.has(name)) return chunkIndexCache.get(name);
+        let rows = null;
+        try {
+            let bytes = fs.readFileSync(path.join(releaseDir, 'objects', name.slice(0, 2), name));
+            if (name.endsWith('.zst')) {
+                if (typeof zlib.zstdDecompressSync !== 'function') throw new Error('this Node has no zstd (needs Node >= 22.15)');
+                bytes = zlib.zstdDecompressSync(bytes);
+            }
+            const index = JSON.parse(bytes.toString('utf8'));
+            rows = (index.chunks || []).map((c) => `${c[0]}.${c[3]}`);
+        } catch (error) {
+            log.warn('queue.chunkindex.unreadable', { object: name, error: error.message });
+            return []; // not cached: retried at the next refresh
+        }
+        chunkIndexCache.set(name, rows);
+        return rows;
+    };
     const coreObjects = {
         names: new Set(),
         loadedAt: 0,
         has(name) { return this.names.has(name) || !this.known.has(name); },
+        isKnown(name) { return this.known.has(name); },
         known: new Set(),
         refresh() {
             const dir = config.queue.releasesDir;
@@ -110,10 +134,19 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
                     try {
                         const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
                         for (const m of manifest.modules || []) {
+                            const core = m.role === 'core';
                             for (const f of m.files || []) {
-                                if (!f.object) continue;
-                                known.add(f.object);
-                                if (m.role === 'core') names.add(f.object);
+                                if (f.object) {
+                                    known.add(f.object);
+                                    if (core) names.add(f.object);
+                                }
+                                if (f.chunked && f.chunkIndex) {
+                                    known.add(f.chunkIndex);
+                                    for (const chunk of readChunkIndex(path.join(dir, entry.name), f.chunkIndex)) {
+                                        known.add(chunk);
+                                        if (core) names.add(chunk);
+                                    }
+                                }
                             }
                         }
                     } catch (error) {
@@ -155,7 +188,7 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
             }
 
             if (route === 'POST /api/queue/heartbeat') {
-                // REVIEW-AFTER(contract-heartbeat): CONTRACTS section 4 lists slot/release only; heartbeat added for the slot TTL.
+                // Heartbeat keeps a slot alive (CONTRACTS section 8, 15/10; TTL slotTtlSec, the grant says heartbeatSec).
                 const body = await readJson(req, 4096);
                 const expiresAt = queue.heartbeat(body.token);
                 if (!expiresAt) return sendJson(res, 410, { error: 'slot_expired' });
@@ -179,6 +212,7 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
                 // Only objects of Core modules need a slot; other objects (event module, admin client) pass.
                 // Anything that is not a release object (manifest, channels.json, the updater) never needs a slot.
                 const object = original ? path.posix.basename(original.pathname) : null;
+                if (object && !coreObjects.isKnown(object) && now() - coreObjects.loadedAt > 5000) coreObjects.refresh();
                 if (original && (!original.pathname.includes('/objects/') || !coreObjects.has(object))) {
                     res.writeHead(200, { 'Content-Length': 0, 'Cache-Control': 'no-store' });
                     return res.end();

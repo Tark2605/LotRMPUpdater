@@ -16,6 +16,11 @@ namespace Lotr.Updater
         private readonly MainViewModel _vm;
         private readonly StartOptions _options;
 
+        private TrayIcon _tray;
+        private bool _started;
+        private bool _exiting;
+        private bool _toldAboutTray;
+
         public MainWindow(StartOptions options)
         {
             _options = options;
@@ -23,14 +28,72 @@ namespace Lotr.Updater
             _vm = new MainViewModel(options);
             DataContext = _vm;
             _vm.LogAppended += () => LiveLog.ScrollToEnd();
+            _vm.TrayNotification += (title, text) => _tray?.Notify(title, text);
+            _vm.RestartRequested += () => { _exiting = true; Close(); };
             SourceInitialized += (s, e) => WindowChrome.UseDarkTitleBar(this);
             Loaded += async (s, e) =>
             {
-                if (options.Minimized) WindowState = WindowState.Minimized;
-                await _vm.StartAsync();
-                _ = _vm.LoadScansAsync();
+                await BeginAsync();
                 if (_options.TourDir != null) await TourAsync(_options.TourDir);
             };
+            Closing += OnClosing;
+            Closed += (s, e) => _tray?.Dispose();
+        }
+
+        private async Task BeginAsync()
+        {
+            if (_started) return;
+            _started = true;
+            await _vm.StartAsync();
+            _ = _vm.LoadScansAsync();
+        }
+
+        /// <summary>Started by the optional Startup shortcut (--minimized): no window, only the tray icon; checks and the
+        /// background pre-download run as usual, and a balloon says when an update is ready to install.</summary>
+        public void StartInTray()
+        {
+            ShowTray();
+            _ = BeginAsync();
+        }
+
+        public void ShowFromTray()
+        {
+            if (_tray != null) _tray.Visible = false;
+            Show();
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        }
+
+        private void ShowTray()
+        {
+            if (_tray == null)
+                _tray = new TrayIcon(Program.ExePath, () => Dispatcher.BeginInvoke(new Action(ShowFromTray)),
+                    () => Dispatcher.BeginInvoke(new Action(() => _ = _vm.CheckAsync(true))),
+                    () => Dispatcher.BeginInvoke(new Action(ExitFromTray)));
+            _tray.Visible = true;
+            _vm.InTray = true;
+        }
+
+        private void ExitFromTray()
+        {
+            _exiting = true;
+            Close();
+            if (!IsLoaded) Application.Current.Shutdown(); // never shown: Close() does not end the app
+        }
+
+        private void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            // With "Start with Windows" on, closing the window keeps the app in the notification area (pre-download),
+            // unless the player chose Exit there. Otherwise closing quits, as before.
+            if (_exiting || _options.TourDir != null || !_vm.StartWithWindows || _vm.Busy) return;
+            e.Cancel = true;
+            Hide();
+            ShowTray();
+            if (!_toldAboutTray)
+            {
+                _toldAboutTray = true;
+                _tray.Notify("Still running in the notification area", "It downloads mod updates in advance. Right-click the icon › Exit to close it, or turn off \"Start with Windows\" in Settings.");
+            }
         }
 
         /// <summary>Dev only: walks through every screen against the local fake release and saves a PNG of each.</summary>

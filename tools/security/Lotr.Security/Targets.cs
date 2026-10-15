@@ -66,7 +66,7 @@ public static class Targets
     {
         if (objectsDir != null && obj != null)
         {
-            // REVIEW-AFTER(manifest): objects are ".raw" until the compression study decides (CONTRACTS §1).
+            // Objects are .zst or .raw (CONTRACTS §1, decided 15/10); only .raw is byte-identical to the installed file.
             // A compressed object is NOT the file players run, so it must not be uploaded as-is.
             if (obj.EndsWith(".raw", StringComparison.OrdinalIgnoreCase))
             {

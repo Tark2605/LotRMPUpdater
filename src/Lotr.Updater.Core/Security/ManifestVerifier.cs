@@ -69,9 +69,24 @@ namespace Lotr.Updater.Core.Security
     /// <summary>Public keys compiled into the updater (CONTRACTS §3: a list, for key rotation).</summary>
     public static class TrustedKeys
     {
-        // REVIEW-AFTER(release-key): paste the server's release-signing.pub.pem here once `lotr-publish init-key` ran on the
-        // production server. Empty until then: a production build refuses every release, by design. Test keys are only ever
-        // passed on the command line of a --dev run (never compiled in).
-        public static readonly string[] Production = new string[0];
+        // Every Security/Keys/*.pub.pem of this project is embedded (resource "trusted-keys/<file>"). Empty until the server's
+        // release-signing.pub.pem is pasted there (docs/MANIFEST.md, "Production key"): such a build refuses every release,
+        // and a Release build of the exe fails unless -p:AllowNoProductionKey=true. Test keys are only ever passed on the
+        // command line of a --dev run (never compiled in).
+        public static readonly string[] Production = LoadEmbedded();
+
+        private static string[] LoadEmbedded()
+        {
+            var asm = typeof(TrustedKeys).Assembly;
+            var list = new List<string>();
+            foreach (var name in asm.GetManifestResourceNames().Where(n => n.StartsWith("trusted-keys/", StringComparison.Ordinal)).OrderBy(n => n, StringComparer.Ordinal))
+                using (var s = asm.GetManifestResourceStream(name))
+                using (var r = new System.IO.StreamReader(s))
+                {
+                    var pem = r.ReadToEnd();
+                    if (pem.Contains("BEGIN PUBLIC KEY")) list.Add(pem);
+                }
+            return list.ToArray();
+        }
     }
 }

@@ -13,12 +13,19 @@ namespace Lotr.Updater.Platform
     /// %LOCALAPPDATA%\LotRMPUpdater\app\, adds a Start menu shortcut, and registers ONE registry key, the per-user uninstall
     /// entry (HKCU\...\Uninstall\LotRMPUpdater) so it appears in Windows "Installed apps". Nothing else in the registry.
     /// </summary>
+    /// <summary>.lnk files through WScript.Shell (what Explorer itself uses); no third-party code.</summary>
+    public sealed class ComShortcutWriter : IShortcutWriter
+    {
+        public void Create(string lnkPath, string targetExe, string arguments, string description) =>
+            SelfInstall.CreateShortcut(lnkPath, targetExe, arguments, description);
+    }
+
     public static class SelfInstall
     {
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\LotRMPUpdater";
         public const string DisplayName = "LotR MP Event updater";
 
-        public static string InstalledExe(UpdaterPaths p) => Path.Combine(p.AppDir, "LotRMPUpdater.exe");
+        public static string InstalledExe(UpdaterPaths p) => p.InstalledExe;
 
         public static string StartMenuShortcut =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), DisplayName + ".lnk");
@@ -34,7 +41,7 @@ namespace Lotr.Updater.Platform
             var target = InstalledExe(p);
             try
             {
-                if (!IsRunningInstalledCopy(p))
+                if (!IsRunningInstalledCopy(p) && !InstalledIsNewer(target, version, log))
                 {
                     Directory.CreateDirectory(p.AppDir);
                     File.Copy(CurrentExe, target, true);
@@ -52,7 +59,7 @@ namespace Lotr.Updater.Platform
                     k.SetValue("NoRepair", 1, RegistryValueKind.DWord);
                     k.SetValue("EstimatedSize", (int)(new FileInfo(target).Length / 1024), RegistryValueKind.DWord);
                 }
-                if (!File.Exists(StartMenuShortcut)) CreateShortcut(StartMenuShortcut, target, "Keeps the LotR MP Event mod up to date");
+                if (!File.Exists(StartMenuShortcut)) CreateShortcut(StartMenuShortcut, target, null, "Keeps the LotR MP Event mod up to date");
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException)
             {
@@ -61,7 +68,18 @@ namespace Lotr.Updater.Platform
             return target;
         }
 
-        private static void CreateShortcut(string lnk, string target, string description)
+        /// <summary>An older download started from Downloads must not replace a newer, self-updated installed copy.</summary>
+        private static bool InstalledIsNewer(string installed, string runningVersion, UpdaterLog log)
+        {
+            if (!File.Exists(installed)) return false;
+            var v = FileVersionInfo.GetVersionInfo(installed).FileVersion;
+            if (v != null && v.EndsWith(".0") && v.Split('.').Length == 4) v = v.Substring(0, v.Length - 2);
+            if (Core.SelfUpdate.AppVersions.Compare(v, runningVersion) <= 0) return false;
+            log.Info("The installed updater (" + v + ") is newer than this copy (" + runningVersion + "); it is kept.");
+            return true;
+        }
+
+        internal static void CreateShortcut(string lnk, string target, string arguments, string description)
         {
             try
             {
@@ -71,6 +89,7 @@ namespace Lotr.Updater.Platform
                 var sc = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
                 var st = sc.GetType();
                 st.InvokeMember("TargetPath", BindingFlags.SetProperty, null, sc, new object[] { target });
+                if (!string.IsNullOrEmpty(arguments)) st.InvokeMember("Arguments", BindingFlags.SetProperty, null, sc, new object[] { arguments });
                 st.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, sc, new object[] { Path.GetDirectoryName(target) });
                 st.InvokeMember("Description", BindingFlags.SetProperty, null, sc, new object[] { description });
                 st.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { target + ",0" });
@@ -87,6 +106,7 @@ namespace Lotr.Updater.Platform
                 throw new InvalidOperationException("Refusing to remove an unexpected folder: " + p.Home);
             try { Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false); } catch (Exception) { }
             try { if (File.Exists(StartMenuShortcut)) File.Delete(StartMenuShortcut); } catch (Exception) { }
+            try { new StartupRegistration(StartupRegistration.UserStartupFolder, InstalledExe(p), new ComShortcutWriter()).Disable(); } catch (Exception) { }
             foreach (var d in new[] { Path.Combine(p.Home, "cache"), p.BackupRoot, p.LogDir })
                 try { if (Directory.Exists(d)) Directory.Delete(d, true); } catch (Exception) { }
             foreach (var f in Directory.Exists(p.Home) ? Directory.GetFiles(p.Home) : new string[0])

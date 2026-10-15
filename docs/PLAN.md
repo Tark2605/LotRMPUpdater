@@ -14,13 +14,13 @@ pasted into a Discord ticket. Binding cross-team formats live in `docs/CONTRACTS
 
 | # | Step | Output | State |
 |---|------|--------|-------|
-| 1 | **Game detection** | `LotR.GameDetection` (netstandard2.0 + net48), `lotr-detect.exe` (JSON report), test bench of simulated PCs, smoke test on a real PC — see `docs/DETECTION.md` | done (15/10) |
-| 2 | **Release format and publishing** | signed manifest (ECDSA P-256), content-addressed objects, publish CLI, verification library, local server bench (`docs/CONTRACTS.md` §1–3) | in progress |
-| 3 | **WPF utility skeleton** | screens: plan of actions, live log, "Verify my install", About (endpoints), settings; no real download yet | next |
-| 4 | **Download and install engine** | file-level delta, cache, resume, atomic swap of a module folder, rollback to the previous release, Workshop Core reuse | |
-| 5 | **Server services** | static files behind Caddy, Core download queue, support log upload + one-time code, Discord bot `/support` hand-off (`docs/CONTRACTS.md` §4) | |
-| 6 | **Security pipeline** | VirusTotal + Hybrid Analysis per release, Microsoft false-positive submission, code signing, reproducible build | |
-| 7 | **Site integration and rollout** | `/install/` and `/security/` pages fed by `releases.json`, admin "Modules" screen, beta channel with a few players, then stable | |
+| 1 | **Game detection** | `LotR.GameDetection` (netstandard2.0 + net48), `lotr-detect.exe` (JSON report, user name and 8.3 profile name masked), test bench of simulated PCs, smoke test on a real PC — see `docs/DETECTION.md` | done (15/10) |
+| 2 | **Release format and publishing** | signed manifest (ECDSA P-256), content-addressed objects (zstd / FastCDC chunks), `lotr-publish` (incl. `publish-updater`), verification library, local server bench (`docs/CONTRACTS.md` §1–3, `docs/MANIFEST.md`) | done (15/10) |
+| 3 | **WPF utility** | `LotRMPUpdater.exe` (net48, single file, 1.56 MB Release, embedded OFL fonts): plan of actions, live log, "Verify my install", Support, Settings, About (endpoints, folders, licences), self-update, optional Start with Windows + tray | done (15/10) |
+| 4 | **Download and install engine** | file-level delta, chunk-level delta for big files, cache, resume, atomic swap, rollback/recovery, Core download queue with heartbeat; Workshop Core reuse not yet | mostly done (chunks + queue; Workshop reuse later) |
+| 5 | **Server services** | static files behind Caddy, Core download queue (advisory or enforce), support log upload + one-time code, Discord bot `/support` hand-off (`docs/CONTRACTS.md` §4); rehearsed end to end on loopback (`tools/rehearsal/Run-Rehearsal.ps1`) | done, pending the real server |
+| 6 | **Security pipeline** | VirusTotal + Hybrid Analysis per release (`lotr-security`, `publish --scan`), Microsoft false-positive submission, code signing scripts, reproducible build check | automation ready, pending accounts / keys |
+| 7 | **Site integration and rollout** | `/install/` and `/security/` pages fed by `releases.json`, admin "Modules" screen (`<root>\tools\lotr-publish`), beta channel with a few players, then stable | beta pending |
 
 ## Transparency principles
 
@@ -38,6 +38,8 @@ The utility must earn trust by showing everything it does. These are requirement
    (beyond its own uninstall entry, per user), other mods or saves.
 5. **No admin, no background service, no telemetry.** Runs as the current user (`asInvoker` manifest); if Modules is not
    writable it explains how to fix it instead of elevating. No Windows service, no scheduled task, no usage statistics.
+   Optional, off by default: "Start with Windows (minimised to the tray)" = one shortcut in the user's own Startup
+   folder (no registry Run key), explained in Settings and About; the tray icon says when an update is ready.
 6. **About screen lists the exact network endpoints** it may contact (our domain's `/files/` and `/api/` paths, nothing
    else), with the reason for each.
 7. **"Verify my install"** button: re-hashes every installed file against the signed manifest and lists differences,
@@ -62,7 +64,8 @@ The Core module is about 9.5 GB, so distribution has to be frugal for the server
 - **File-level delta updates**: objects are addressed by SHA-256; a new release only downloads files whose hash
   changed (`docs/CONTRACTS.md` §1).
 - **Background pre-download**: when a release is published, running utilities fetch it into the cache after a random
-  0–6 h jitter, so the event-day peak is spread out; installing is then instant (still behind a click).
+  0–6 h jitter, so the event-day peak is spread out; installing is then instant (still behind a click). With "Start with
+  Windows" on, this also happens while the window is closed (tray icon).
 - **2–4 parallel connections per client**, never more.
 - **Resume and exponential backoff**: interrupted downloads resume (HTTP Range); 503 / 429 honour `Retry-After`, then
   back off exponentially with jitter.
@@ -71,3 +74,11 @@ The Core module is about 9.5 GB, so distribution has to be frugal for the server
 - **Steam players reuse the Workshop Core** when the subscribed Workshop item is at the version the release requires;
   only Epic/GOG/Xbox players (or out-of-date Workshop copies) download the Core from us.
 - Later options: a Cloudflare R2 mirror (no egress fees), and a torrent with a web seed for the Core.
+
+## Decisions after step 3 (15/10/2026)
+
+- Game version outside the release's `game.minVersion/maxVersion`: **warning only**, never blocks (owner decision).
+- The updater updates itself from `files/updater/latest.json` (signed with the release key, `latest.json.sig`): new
+  exe verified (SHA-256, release-key signature or same Authenticode signer), swapped at the next start, previous exe
+  kept for rollback.
+- Open items after the final review pass: `docs/review-after/RESOLVED.md`.

@@ -139,7 +139,7 @@ if ($Provider -eq 'TestCert') {
 }
 
 if ($WriteSha256) {
-    # REVIEW-AFTER(publish-cli): CONTRACTS §1 lists "LotRMPUpdater-<version>.exe (+ .sha256)"; format here is "<hex>  <name>".
+    # Same "<hex>  <name>" LF format as lotr-publish publish-updater, which owns the published .sha256 and latest.json.
     $line = "$($rep.Sha256)  $(Split-Path -Leaf $File)`n"
     [System.IO.File]::WriteAllText("$File.sha256", $line, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "Wrote $File.sha256"

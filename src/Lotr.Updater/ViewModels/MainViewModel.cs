@@ -74,7 +74,7 @@ namespace Lotr.Updater.ViewModels
             _options = options;
             _ui = Dispatcher.CurrentDispatcher;
             AppVersion = typeof(MainViewModel).Assembly.GetName().Version.ToString(3);
-            var cfg = new UpdaterConfig { AppVersion = AppVersion };
+            var cfg = new UpdaterConfig { AppVersion = AppVersion, CurrentExe = Program.ExePath };
             UpdaterPaths paths;
             if (options.Dev)
             {
@@ -86,6 +86,9 @@ namespace Lotr.Updater.ViewModels
             }
             else paths = UpdaterPaths.Default();
             _svc = new UpdaterService(cfg, paths, lockFinder: new RestartManagerLockFinder());
+            // Dev runs never touch the real Startup folder: a test folder inside the dev home stands in for it.
+            _startup = new StartupRegistration(options.Dev ? Path.Combine(paths.Home, "startup-folder-test") : StartupRegistration.UserStartupFolder,
+                paths.InstalledExe, new ComShortcutWriter());
             _svc.Log.Line += l => _ui.BeginInvoke(new Action(() => AppendLog(l)));
             IsDev = options.Dev;
 
@@ -111,6 +114,8 @@ namespace Lotr.Updater.ViewModels
                 RollbackOffered = false;
                 _ = CheckAsync(true);
             }, () => !Busy && RollbackOffered);
+            RestartToUpdateCommand = new RelayCommand(RestartToUpdate, () => !Busy && UpdaterUpdateReady);
+            RollbackUpdaterCommand = new RelayCommand(RollbackUpdater, () => !Busy && PreviousUpdaterVersion != null);
             UninstallCommand = new RelayCommand(() => new UninstallWindow(_options) { Owner = Application.Current.MainWindow }.ShowDialog());
 
             _clock = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (s, e) => Tick(), _ui);
@@ -119,6 +124,15 @@ namespace Lotr.Updater.ViewModels
         }
 
         public UpdaterService Service => _svc;
+        private readonly StartupRegistration _startup;
+        private string _notifiedRelease;
+
+        /// <summary>Balloon text for the tray icon (shown only while the window is hidden).</summary>
+        public event Action<string, string> TrayNotification;
+        /// <summary>The window must close for real (restart into the new updater).</summary>
+        public event Action RestartRequested;
+        /// <summary>The window is hidden and the tray icon shows.</summary>
+        public bool InTray { get; set; }
 
         // ------------------------------------------------------------ shell
         private Page _page = Page.Home;
@@ -149,6 +163,8 @@ namespace Lotr.Updater.ViewModels
         public RelayCommand BrowseGameCommand { get; }
         public RelayCommand UninstallCommand { get; }
         public RelayCommand AcceptRollbackCommand { get; }
+        public RelayCommand RestartToUpdateCommand { get; }
+        public RelayCommand RollbackUpdaterCommand { get; }
         private bool _rollbackOffered;
         public bool RollbackOffered { get => _rollbackOffered; set => Set(ref _rollbackOffered, value); }
 
@@ -299,6 +315,83 @@ namespace Lotr.Updater.ViewModels
                 var start = EventSchedule.NextStartUtc(now);
                 _nextAutoCheckUtc = now.AddMinutes(start - now < TimeSpan.FromHours(12) ? 20 : 120);
             }
+            if (_latest?.Plan != null && _latest.Plan.HasChanges && InTray && !_svc.State.PreDownload && _notifiedRelease != _latest.Manifest.ReleaseId)
+            {
+                _notifiedRelease = _latest.Manifest.ReleaseId;
+                TrayNotification?.Invoke("LotR MP Event: update available", ReleaseLabel(_latest.Manifest) + ". Click to review it (nothing is installed without your click).");
+            }
+            await CheckSelfUpdateAsync();
+        }
+
+        // ------------------------------------------------------------ self-update of this app
+        private string _updaterUpdateText;
+        /// <summary>Banner on Home when a newer updater is downloaded and verified (null hides it).</summary>
+        public string UpdaterUpdateText { get => _updaterUpdateText; set { if (Set(ref _updaterUpdateText, value)) Raise(nameof(UpdaterUpdateReady)); } }
+        public bool UpdaterUpdateReady => _updaterUpdateText != null;
+        private bool _selfUpdateRunning;
+
+        /// <summary>Reads files/updater/latest.json; a newer updater is downloaded, checked (SHA-256, release-key signature,
+        /// Authenticode signer) and staged; it replaces this exe at the next start (or now, with "Restart now").</summary>
+        private async Task CheckSelfUpdateAsync()
+        {
+            if (_selfUpdateRunning || _options.TourDir != null) return;
+            _selfUpdateRunning = true;
+            try
+            {
+                var su = _svc.SelfUpdate;
+                var pending = su.Pending;
+                if (pending == null)
+                {
+                    var offer = await Task.Run(() => su.CheckAsync(_svc.State.Channel, _svc.State.SkippedUpdaterVersion, CancellationToken.None));
+                    if (offer != null) pending = await Task.Run(() => su.DownloadAsync(offer, null, CancellationToken.None));
+                }
+                if (pending != null)
+                {
+                    bool installedCopy = SelfInstall.IsRunningInstalledCopy(_svc.Paths);
+                    UpdaterUpdateText = "A new version of this updater (" + pending.Version + ") is downloaded and checked. " +
+                                        (installedCopy ? "It replaces this one the next time the app starts; the current one is kept so you can go back."
+                                                       : "Start the app from the Start menu to use it.");
+                    if (InTray && _notifiedRelease != "updater-" + pending.Version)
+                    {
+                        _notifiedRelease = "updater-" + pending.Version;
+                        TrayNotification?.Invoke("LotR MP Event updater " + pending.Version + " is ready", "It is used the next time the app starts.");
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is Core.SelfUpdate.SelfUpdateException || ex is Core.Net.HttpFetchException || ex is System.Net.Http.HttpRequestException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                _svc.Log.Warn("Updater self-update: " + ex.Message);
+            }
+            finally { _selfUpdateRunning = false; CommandRequery(); }
+        }
+
+        private void RestartToUpdate()
+        {
+            var exe = _svc.Paths.InstalledExe;
+            if (!SelfInstall.IsRunningInstalledCopy(_svc.Paths) || !File.Exists(exe)) return;
+            try
+            {
+                // The new process waits for this one to exit, swaps the exe and starts the new version.
+                Process.Start(new ProcessStartInfo(exe, "--after " + Process.GetCurrentProcess().Id) { UseShellExecute = false })?.Dispose();
+                RestartRequested?.Invoke();
+            }
+            catch (Exception ex) { _svc.Log.Error("Could not restart: " + ex.Message); }
+        }
+
+        /// <summary>Version kept as LotRMPUpdater.old.exe after a self-update (null: nothing to go back to).</summary>
+        public string PreviousUpdaterVersion => SelfInstall.IsRunningInstalledCopy(_svc.Paths) ? Core.SelfUpdate.SelfUpdateSwap.PreviousVersion(_svc.Paths) : null;
+
+        private void RollbackUpdater()
+        {
+            var r = MessageBox.Show("Go back to the previous version of this updater (" + PreviousUpdaterVersion + ")?\n\nThe current version will not be offered again; a later one will.",
+                "LotR MP Event updater", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) return;
+            try
+            {
+                Process.Start(new ProcessStartInfo(_svc.Paths.InstalledExe, "--rollback-updater --after " + Process.GetCurrentProcess().Id) { UseShellExecute = false })?.Dispose();
+                RestartRequested?.Invoke();
+            }
+            catch (Exception ex) { _svc.Log.Error("Could not roll back the updater: " + ex.Message); }
         }
 
         private void ApplyCheck(CheckResult r)
@@ -357,7 +450,11 @@ namespace Lotr.Updater.ViewModels
             try
             {
                 if (await Task.Run(() => _svc.PreDownloadIfDueAsync(_latest, prog, _cts.Token)))
+                {
                     StatusDetail += " Already downloaded in the background: installing takes seconds.";
+                    _notifiedRelease = _latest.Manifest.ReleaseId;
+                    TrayNotification?.Invoke("LotR MP Event: update ready", ReleaseLabel(_latest.Manifest) + " is downloaded. Click to review and install it (takes seconds).");
+                }
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { _svc.Log.Warn("Pre-download paused: " + ex.Message); }
@@ -627,6 +724,29 @@ namespace Lotr.Updater.ViewModels
             }
         }
 
+        /// <summary>Optional, off by default: one shortcut in the user's Startup folder that starts the app minimised to the
+        /// notification area (no registry Run key, no scheduled task, no service). The shortcut IS the setting.</summary>
+        public bool StartWithWindows
+        {
+            get { try { return _startup.IsEnabled; } catch (Exception) { return false; } }
+            set
+            {
+                try
+                {
+                    if (value) _startup.Enable(); else _startup.Disable();
+                    _svc.Log.Info((value ? "Start with Windows on: " : "Start with Windows off: removed ") + _startup.ShortcutPath);
+                    SettingsMessage = value ? "Added " + _startup.ShortcutPath : "Removed the Startup shortcut.";
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException)
+                {
+                    SettingsMessage = "Could not change the Startup shortcut: " + ex.Message;
+                }
+                Raise();
+            }
+        }
+
+        public string StartupShortcutPath => _startup.ShortcutPath;
+
         private void BrowseGame()
         {
             using (var d = new System.Windows.Forms.FolderBrowserDialog { Description = "Choose the Bannerlord folder (the one that contains 'bin' and 'Modules')", ShowNewFolderButton = false })
@@ -651,8 +771,23 @@ namespace Lotr.Updater.ViewModels
             Folders.Add(new Fact("Its own data", _svc.Paths.Home + "  (app, download cache, logs, settings, one backup)"));
             Folders.Add(new Fact("Registry", "HKCU\\" + SelfInstall.UninstallKey + "  (only the \"Installed apps\" entry)"));
             Folders.Add(new Fact("Start menu", "one shortcut: " + SelfInstall.DisplayName));
+            Folders.Add(new Fact("Startup (optional)", "only if you tick \"Start with Windows\" in Settings: one shortcut " + _startup.ShortcutPath + " (no registry Run key, no scheduled task, no service)"));
             if (_svc.Verifier.TrustedFingerprints.Count == 0) Fingerprints.Add("No release key embedded yet (placeholder): every release will be refused.");
             foreach (var f in _svc.Verifier.TrustedFingerprints) Fingerprints.Add(f);
+        }
+
+        /// <summary>Licence texts of the bundled fonts (SIL Open Font License 1.1), shown on the About page.</summary>
+        public string FontLicences
+        {
+            get
+            {
+                try
+                {
+                    using (var s = typeof(MainViewModel).Assembly.GetManifestResourceStream("licences.OFL.txt"))
+                    using (var r = new StreamReader(s)) return r.ReadToEnd();
+                }
+                catch (Exception) { return "SIL Open Font License 1.1 (text missing from this build)."; }
+            }
         }
 
         public async Task LoadScansAsync()

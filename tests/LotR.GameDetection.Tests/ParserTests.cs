@@ -152,6 +152,34 @@ namespace LotR.GameDetection.Tests
         }
 
         [Fact]
+        public void Mask_also_hides_the_8_3_short_profile_name()
+        {
+            var names = new List<string> { "Utilsateur", "UTILSA~1" };
+            Assert.Equal(@"C:\Users\<user>\AppData\Local\Temp\x", ReportJson.MaskAll(@"C:\Users\UTILSA~1\AppData\Local\Temp\x", names));
+            Assert.Equal(@"C:\Users\<user>\Games", ReportJson.MaskAll(@"C:\Users\Utilsateur\Games", names));
+            // Even when the short name is not known (another account's 8.3 name, or the API is unavailable).
+            Assert.Equal(@"D:\Users\<user>\x", ReportJson.MaskAll(@"D:\Users\JEANDU~2\x", new List<string>()));
+            Assert.Equal("C:/Users/<user>/x", ReportJson.MaskShortProfile("C:/Users/ABCDEF~1/x"));
+            // Not a profile folder directly under Users: untouched.
+            Assert.Equal(@"C:\Games\MOUNTA~1\x", ReportJson.MaskShortProfile(@"C:\Games\MOUNTA~1\x"));
+            Assert.Equal(@"C:\Users\Public\x", ReportJson.MaskShortProfile(@"C:\Users\Public\x"));
+        }
+
+        [Fact]
+        public void Report_json_masks_the_real_short_profile_path()
+        {
+            var names = ReportJson.UserNamesToMask();
+            Assert.Contains(System.Environment.UserName, names);
+            var temp = System.IO.Path.GetTempPath(); // usually the 8.3 form on this kind of profile
+            var m = new FakeMachine();
+            var game = System.IO.Path.Combine(temp, "lotr-mask", "Bannerlord");
+            m.AddGame(game);
+            var json = ReportJson.Serialize(m.Detector.ValidateManualSelection(game), maskUserName: true, toolVersion: "test");
+            foreach (var n in names) Assert.DoesNotContain(@"\\" + n + @"\\", json, System.StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotMatch(@"(?i)\\\\Users\\\\[^\\""]{1,6}~\d", json);
+        }
+
+        [Fact]
         public void Name_matching()
         {
             Assert.True(BannerlordConstants.MatchesName("Mount & Blade II- Bannerlord"));

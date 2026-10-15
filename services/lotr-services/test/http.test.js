@@ -110,6 +110,40 @@ test('forward_auth enforce: only objects of core modules need a slot (from the p
     assert.equal((await s.call('GET', '/internal/queue/check', uri(core, `?slot=${slot.json.token}`))).status, 200);
 });
 
+test('forward_auth enforce: chunked files (index free, chunks core) and releases published after start', async (t) => {
+    const zlib = require('node:zlib');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lotr-services-chunks-'));
+    const releases = path.join(root, 'files', 'releases');
+    fs.mkdirSync(releases, { recursive: true });
+    const s = await startApp({ root, queue: { enforcement: 'enforce' } });
+    t.after(s.stop);
+    // Published AFTER the service started (the periodic sweep has not run yet).
+    const id = '20261015-150000-c0ffee00';
+    const rel = path.join(releases, id);
+    const put = (name, bytes) => { fs.mkdirSync(path.join(rel, 'objects', name.slice(0, 2)), { recursive: true }); fs.writeFileSync(path.join(rel, 'objects', name.slice(0, 2), name), bytes); };
+    const coreChunk = 'd'.repeat(64);
+    const eventChunk = 'e'.repeat(64);
+    const coreIndex = '1'.repeat(64) + '.zst';
+    const eventIndex = '2'.repeat(64) + '.zst';
+    const index = (chunk) => zlib.zstdCompressSync(Buffer.from(JSON.stringify({ schema: 1, chunker: 'fastcdc2020', sha256: 'f'.repeat(64), size: 10, chunks: [[chunk, 10, 10, 'raw']] })));
+    put(coreIndex, index(coreChunk));
+    put(eventIndex, index(eventChunk));
+    fs.writeFileSync(path.join(rel, 'manifest.json'), JSON.stringify({
+        schema: 1,
+        modules: [
+            { id: 'LotRMPCore', role: 'core', files: [{ path: 'big.tpac', chunked: true, chunkIndex: coreIndex }] },
+            { id: 'OrderMiddleEarthEvent', role: 'event', files: [{ path: 'big.wav', chunked: true, chunkIndex: eventIndex }] },
+        ],
+    }));
+    s.clock.t += 10_000; // past the 5 s refresh guard
+    const uri = (obj, q = '') => ({ headers: { 'x-forwarded-uri': `/files/releases/${id}/objects/${obj.slice(0, 2)}/${obj}${q}` } });
+    assert.equal((await s.call('GET', '/internal/queue/check', uri(coreIndex))).status, 200, 'a chunk index is read while planning: no slot');
+    assert.equal((await s.call('GET', '/internal/queue/check', uri(eventChunk + '.raw'))).status, 200, 'chunk of an event file: no slot');
+    assert.equal((await s.call('GET', '/internal/queue/check', uri(coreChunk + '.raw'))).status, 403, 'chunk of a core file needs a slot');
+    const slot = await s.call('POST', '/api/queue/slot', { body: { client: 'install-chunks' } });
+    assert.equal((await s.call('GET', '/internal/queue/check', uri(coreChunk + '.raw', `?slot=${slot.json.token}`))).status, 200);
+});
+
 test('support: stores, masks again server-side, returns a LOTR code with 72 h expiry', async (t) => {
     const s = await startApp();
     t.after(s.stop);

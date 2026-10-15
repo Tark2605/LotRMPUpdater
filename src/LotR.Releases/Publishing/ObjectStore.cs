@@ -28,8 +28,7 @@ namespace LotR.Releases.Publishing
     /// (&lt;releaseId&gt;/objects/ab/&lt;sha&gt;.&lt;ext&gt;); an object that an older release already holds is NTFS
     /// hard-linked into the new release instead of being written again (zero extra bytes, and deleting an old release
     /// later never breaks a newer one). Copy is the fallback when hard links are impossible (other volume, FAT).
-    /// REVIEW-AFTER(object-store-layout): CONTRACTS §1 puts objects inside each release folder; this keeps that layout
-    /// and dedupes with hard links. A shared pool (releases/objects/) would need a contract change for the updater URLs.
+    /// CONTRACTS §1/§8: objects stay inside each release folder, deduplicated with hard links (no shared pool).
     /// </summary>
     public sealed class ObjectStore
     {

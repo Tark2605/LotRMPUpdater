@@ -100,8 +100,47 @@ lotr-publish verify-install "<game>\Modules\LotRMPEvent" --release C:\www\lotrmp
 - `--json` prints machine-readable results for the admin panel "Modules" screen (diff lists, sizes, warnings).
 - `scan` runs `tools\security\Invoke-ReleaseScans.ps1`, which writes `security.json`. That script finds its own API
   keys and skips a service without a key; `lotr-publish` never reads them. Exit 3 = "run again later".
-  `publish --scan` runs it after a successful publish and never undoes the publication.
+  `publish --scan` runs it after a successful publish and never undoes the publication (with `--json` too: the
+  scan output then goes to stderr, stdout stays the JSON document). On the server the site deploy package installs
+  the tools as `<root>\tools\lotr-publish\` and `<root>\tools\lotr-security\` (script + exe), where `--scan` finds them.
 - Exit codes: 0 ok, 1 failure (incl. verification), 2 usage error. `LOTR_PUBLISH_DEBUG=1` prints stack traces.
+
+### Publishing the updater itself (`publish-updater`)
+
+```
+lotr-publish publish-updater --exe <signed LotRMPUpdater.exe> --root C:\www\lotrmp [--channel stable] [--version 1.2.3]
+                             [--base-url https://<domain>] [--key <file>] [--no-sign] [--force] [--json]
+```
+- Writes into `<root>\files\updater\`: `LotRMPUpdater-<version>.exe`, `LotRMPUpdater-<version>.exe.sha256`
+  (`<hex>  <name>` + LF, the format of `Sign-Updater.ps1 -WriteSha256`; this command is the one owner of the
+  published copy), `latest.json` (`latest-<channel>.json` for another channel) and `latest.json.sig`.
+- Every file is written to a temporary name and renamed; the signature, then `latest.json`, are written LAST, so an
+  updater never sees a `latest.json` that points at a missing exe. Re-publishing the same bytes is a no-op; other
+  bytes under an existing version are refused (bump the version, or `--force`).
+- `version` comes from the exe's version resource (`0.1.0.0` → `0.1.0`) unless `--version` is given; `url` is
+  site-relative (`/files/updater/...`) unless `--base-url https://...`; `signed` = the exe carries a VALID
+  Authenticode signature (an invalid one is refused).
+- `latest.json.sig` (same JSON format as `manifest.json.sig`) is signed with the release key (`--key`, default the
+  `--root` key); `--no-sign` skips it and removes a stale one. Additive to CONTRACTS §1 (coordinator to fold in).
+- The updater accepts a new exe only when its SHA-256 matches `latest.json` AND (`latest.json.sig` verifies with an
+  embedded release key, OR both the running and the new exe are Authenticode-signed by the same subject). A signed
+  updater never accepts an unsigned or differently signed one. The new exe is staged in
+  `%LOCALAPPDATA%\LotRMPUpdater\app\update\`, swapped in at the next start, and the previous one is kept as
+  `LotRMPUpdater.old.exe` (About › "Go back to the previous version" = `--rollback-updater`).
+
+### Production key (embedding it in the updater)
+
+The updater trusts every `src/Lotr.Updater.Core/Security/Keys/*.pub.pem` (embedded resources `trusted-keys/<file>`).
+The folder holds only a README placeholder until the real key exists. After `lotr-publish init-key` ran on the
+production server:
+
+1. Copy **only** `<root>\data\secrets\release-signing.pub.pem` (never the `.key`) to
+   `src/Lotr.Updater.Core/Security/Keys/release-signing.pub.pem` (rotation: add the second `.pub.pem` next to it).
+2. Check the fingerprint: `lotr-publish show-key --pub src\Lotr.Updater.Core\Security\Keys\release-signing.pub.pem`
+   must equal the server's (and, later, the site's Security page). The app's About page lists it too.
+3. `dotnet build src/Lotr.Updater -c Release`. A **Release** build FAILS (error `LOTR001`) while the folder has no
+   `*.pub.pem`; `-p:AllowNoProductionKey=true` builds a test exe that refuses every release. Debug builds and the
+   tests never need the key (dev runs pass `--trust <pem>`).
 
 ## 3. Key management
 

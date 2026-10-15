@@ -89,7 +89,7 @@ public sealed class HaEntry
 
 /// <summary>
 /// security.json — the sidecar written next to a release's manifest (or next to the updater exe).
-/// The publish tool merges its "done" entries into manifest.security (REVIEW-AFTER(publish-cli)); the site reads it.
+/// It stays an unsigned sidecar (CONTRACTS §8, 15/10: never merged into the signed manifest); the site and the updater read it.
 /// </summary>
 public sealed class SecuritySidecar
 {
@@ -124,7 +124,7 @@ public sealed class SecuritySidecar
 
     /// <summary>
     /// The exact "security" block of docs/CONTRACTS.md §2: only finished results, only contract fields.
-    /// The publish tool should call this (or reproduce it) when merging. REVIEW-AFTER(publish-cli)
+    /// Printed by "lotr-security manifest-block" (same shape as the sidecar's contract fields).
     /// </summary>
     public object ToManifestBlock() => new
     {

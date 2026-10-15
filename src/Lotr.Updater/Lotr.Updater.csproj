@@ -25,6 +25,8 @@
     <Reference Include="System.Net.Http" />
     <Resource Include="Resources\app.ico" />
     <Resource Include="Resources\app-256.png" />
+    <Resource Include="Resources\Fonts\*.ttf" />
+    <EmbeddedResource Include="Resources\Fonts\OFL.txt" LogicalName="licences.OFL.txt" />
   </ItemGroup>
   <!-- Embed every copy-local DLL (Core, GameDetection, ZstdSharp and its System.* helpers) so the exe runs alone. -->
   <Target Name="EmbedCopyLocalAssemblies" AfterTargets="ResolveAssemblyReferences">
@@ -33,5 +35,15 @@
         <LogicalName>lib.%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</LogicalName>
       </EmbeddedResource>
     </ItemGroup>
+  </Target>
+  <!-- A Release exe must carry the production release key: without it every release is refused (CONTRACTS §3).
+       Paste <root>\data\secrets\release-signing.pub.pem into src/Lotr.Updater.Core/Security/Keys/ (docs/MANIFEST.md),
+       or build with -p:AllowNoProductionKey=true for a test exe. -->
+  <Target Name="CheckProductionKey" BeforeTargets="CoreCompile" Condition="'$(Configuration)' == 'Release' And '$(AllowNoProductionKey)' != 'true'">
+    <ItemGroup>
+      <_LotrProductionKey Include="..\Lotr.Updater.Core\Security\Keys\*.pub.pem" />
+    </ItemGroup>
+    <Error Condition="'@(_LotrProductionKey)' == ''" Code="LOTR001"
+           Text="No production release key embedded: put release-signing.pub.pem in src\Lotr.Updater.Core\Security\Keys\ (see docs/MANIFEST.md, Production key), or build with -p:AllowNoProductionKey=true for a test exe that refuses every release." />
   </Target>
 </Project>

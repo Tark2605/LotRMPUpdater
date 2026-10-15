@@ -27,8 +27,8 @@ namespace LotR.Releases.Model
         public string ReleaseId { get; set; }
 
         /// <summary>
-        /// Signed channel name. REVIEW-AFTER(anti-rollback): the updater must check it equals the channel it asked
-        /// channels.json for, and refuse a publishedAt older than the installed one unless the user picked a rollback.
+        /// Signed channel name. The updater checks it equals the channel it asked channels.json for, and refuses a
+        /// publishedAt older than the installed one unless the player accepted the rollback (CONTRACTS §8, UpdaterService).
         /// </summary>
         public string Channel { get; set; }
 

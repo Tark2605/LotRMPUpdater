@@ -14,8 +14,7 @@ namespace LotR.Releases.Chunking
     ///  "schema":1,"sha256":"&lt;whole file&gt;","size":N}
     /// </code>
     /// Rows are in file order; the object of a row is "&lt;sha256&gt;.&lt;ext&gt;".
-    /// REVIEW-AFTER(chunk-index-format): CONTRACTS §1 says rows {sha256, size, object}; rows here are compact arrays
-    /// [sha256, size, objectSize, ext] (COMPRESSION.md §4.4 wording). Confirm in the contract.
+    /// Rows are compact arrays [sha256, size, objectSize, ext] (CONTRACTS §8, accepted 15/10).
     /// </summary>
     public sealed class ChunkIndex
     {

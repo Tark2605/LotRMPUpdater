@@ -36,10 +36,11 @@
         <GradientStop Color="#0B0A08" Offset="1"/>
     </RadialGradientBrush>
 
-    <!-- Fonts: the site's Cinzel / Cormorant Garamond when installed, otherwise Windows' own serifs (no font files shipped,
-         keeps the exe small). -->
-    <FontFamily x:Key="DisplayFont">Cinzel, Trajan Pro, Constantia, Georgia, serif</FontFamily>
-    <FontFamily x:Key="BodyFont">Constantia, Cambria, Georgia, serif</FontFamily>
+    <!-- Fonts: the site's Cinzel (titles) and Cormorant Garamond (text), OFL-1.1, embedded as static TTFs built by
+         tools/fonts/make_updater_fonts.py (Resources/Fonts, ~220 KB; licence in Resources/Fonts/OFL.txt and on the About page).
+         Windows' own serifs stay as per-character fallback (arrows, symbols, non-Latin names). -->
+    <FontFamily x:Key="DisplayFont">pack://application:,,,/Resources/Fonts/#Cinzel, Constantia, Georgia, serif</FontFamily>
+    <FontFamily x:Key="BodyFont">pack://application:,,,/Resources/Fonts/#Cormorant Garamond, Constantia, Cambria, Georgia, serif</FontFamily>
     <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, Courier New</FontFamily>
 
     <!-- No implicit TextBlock style: it would override the Foreground of text inside buttons. Windows set

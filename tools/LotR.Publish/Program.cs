@@ -40,6 +40,10 @@ Commands:
              services without an API key are skipped by that script; exit 3 = run again later
   export-site-json --out <site>\src\data\releases.json [--channel stable] [--updater-latest <latest.json>]
   verify-install <moduleFolder> --release <releaseDir> [--quick]   compare an installed module with a release
+  publish-updater --exe <LotRMPUpdater.exe> [--root R | --updater-dir <files\updater>] [--channel stable]
+             [--version 1.2.3] [--base-url https://domain] [--key <file>] [--no-sign] [--force] [--json]
+             writes LotRMPUpdater-<version>.exe + .sha256 + latest.json (latest-<channel>.json for other channels),
+             each atomically, latest.json last; latest.json.sig with the release key (default: the --root key)
 
 <modules>: --event <dir> [--core <dir>] [--admin-client <dir>] [--workshop event=3774022783] [--exclude <glob>]
 Common: --threads N (default min(cores,8))
@@ -79,6 +83,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                     case "scan": return Scan(a, a.Positional(0, "releaseDir"), null);
                     case "export-site-json": return ExportSite(a);
                     case "verify-install": return VerifyInstall(a);
+                    case "publish-updater": return PublishUpdater(a);
                     default:
                         Console.Error.WriteLine("unknown command '" + args[0] + "'\n\n" + Usage);
                         return 2;
@@ -289,6 +294,12 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 var r = ReleasePublisher.Publish(req);
                 if (a.Flag("json"))
                 {
+                    if (a.Flag("scan"))
+                    {
+                        // Same scan as without --json; its output goes to stderr so stdout stays the JSON document below.
+                        Scan(a, r.ReleaseDir, Path.GetDirectoryName(Path.GetFullPath(req.Modules[0].Folder).TrimEnd('\\', '/')), outputToStderr: true);
+                    }
+
                     var o = new JsonObject
                     {
                         ["releaseId"] = r.ReleaseId,
@@ -476,7 +487,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
         /// REVIEW-AFTER(security-automation): objects are .zst/.raw, so the scanner needs -SourceModules (the parent of
         /// the module folders, passed automatically after publish); not run against real keys in this workstream.
         /// </summary>
-        private static int Scan(Args a, string releaseDir, string sourceModules)
+        private static int Scan(Args a, string releaseDir, string sourceModules, bool outputToStderr = false)
         {
             string script = a.One("script") ?? FindScanScript();
             if (script == null || !File.Exists(script))
@@ -499,10 +510,22 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 psArgs.Append(" -SourceModules ").Append(Quote(Path.GetFullPath(sourceModules)));
             }
 
-            var psi = new ProcessStartInfo("powershell.exe", psArgs.ToString()) { UseShellExecute = false };
+            var psi = new ProcessStartInfo("powershell.exe", psArgs.ToString()) { UseShellExecute = false, RedirectStandardOutput = outputToStderr };
             Console.Error.WriteLine("scan: " + script);
             using (var p = Process.Start(psi))
             {
+                if (outputToStderr)
+                {
+                    p.OutputDataReceived += (s, e) =>
+                    {
+                        if (e.Data != null)
+                        {
+                            Console.Error.WriteLine(e.Data);
+                        }
+                    };
+                    p.BeginOutputReadLine();
+                }
+
                 p.WaitForExit();
                 Console.Error.WriteLine("scan: exit " + p.ExitCode + (p.ExitCode == 3 ? " (incomplete: run 'lotr-publish scan' again later)" : string.Empty));
                 return p.ExitCode;
@@ -515,7 +538,8 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             string dir = AppDomain.CurrentDomain.BaseDirectory;
             for (int i = 0; i < 6 && dir != null; i++)
             {
-                foreach (var candidate in new[] { Path.Combine(dir, "security", "Invoke-ReleaseScans.ps1"), Path.Combine(dir, "tools", "security", "Invoke-ReleaseScans.ps1") })
+                // Deployed by the site package: <Root>\tools\lotr-publish\ next to <Root>\tools\lotr-security\ (script + exe).
+                foreach (var candidate in new[] { Path.Combine(dir, "security", "Invoke-ReleaseScans.ps1"), Path.Combine(dir, "tools", "security", "Invoke-ReleaseScans.ps1"), Path.Combine(dir, "lotr-security", "Invoke-ReleaseScans.ps1") })
                 {
                     if (File.Exists(candidate))
                     {
@@ -584,6 +608,82 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             return r.Ok ? 0 : 1;
         }
 
+        private static int PublishUpdater(Args a)
+        {
+            string exe = a.One("exe") ?? throw new UsageException("--exe <LotRMPUpdater.exe>");
+            string dir = a.One("updater-dir") ?? (a.Root != null ? Path.Combine(a.Root, "files", "updater") : throw new UsageException("give --root <deployRoot> or --updater-dir <files\\updater>"));
+            var req = new UpdaterPublishRequest
+            {
+                ExePath = exe,
+                UpdaterDir = dir,
+                Channel = a.One("channel") ?? "stable",
+                Version = a.One("version"),
+                BaseUrl = a.One("base-url"),
+                Force = a.Flag("force"),
+            };
+            if (!a.Flag("no-sign"))
+            {
+                var keys = a.Many("key").ToList();
+                if (keys.Count == 0 && a.DefaultKey != null && File.Exists(a.DefaultKey))
+                {
+                    keys.Add(a.DefaultKey);
+                }
+
+                foreach (var k in keys)
+                {
+                    req.Signers.Add(new ReleaseSigner(KeyStore.Load(k)));
+                }
+            }
+
+            UpdaterPublishResult r;
+            try
+            {
+                r = UpdaterPublisher.Publish(req);
+            }
+            finally
+            {
+                foreach (var s in req.Signers)
+                {
+                    s.Dispose();
+                }
+            }
+
+            if (a.Flag("json"))
+            {
+                var o = new JsonObject
+                {
+                    ["ok"] = true,
+                    ["latest"] = r.Latest.ToJson(),
+                    ["exe"] = r.ExeFile,
+                    ["sha256File"] = r.Sha256File,
+                    ["latestFile"] = r.LatestFile,
+                    ["signatureFile"] = r.SignatureFile,
+                    ["authenticode"] = r.Authenticode.Valid ? r.Authenticode.Subject : null,
+                    ["alreadyPublished"] = r.AlreadyPublished,
+                };
+                Console.WriteLine(JsonWriter.ToPrettyString(o));
+            }
+            else
+            {
+                Console.WriteLine("updater     : " + r.Latest.Version + " (" + Mb(r.Latest.Size) + ", sha256 " + r.Latest.Sha256 + ")");
+                Console.WriteLine("authenticode: " + (r.Authenticode.Valid ? "signed by " + r.Authenticode.Subject : r.Authenticode.Status));
+                Console.WriteLine("wrote       : " + r.ExeFile + (r.AlreadyPublished ? " (already there, same bytes)" : string.Empty));
+                Console.WriteLine("wrote       : " + r.Sha256File);
+                if (r.SignatureFile != null)
+                {
+                    Console.WriteLine("wrote       : " + r.SignatureFile);
+                }
+                else
+                {
+                    Console.Error.WriteLine("warning: latest.json is not signed with the release key (no --key / --root key, or --no-sign)");
+                }
+
+                Console.WriteLine("wrote       : " + r.LatestFile);
+            }
+
+            return 0;
+        }
+
         internal static string Mb(long bytes) => (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
     }
 
@@ -614,7 +714,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
 
     internal sealed class Args
     {
-        private static readonly HashSet<string> Flags = new HashSet<string> { "exact", "json", "no-channel", "no-verify", "no-acl", "force", "quick", "scan" };
+        private static readonly HashSet<string> Flags = new HashSet<string> { "exact", "json", "no-channel", "no-verify", "no-acl", "force", "quick", "scan", "no-sign"};
         private readonly Dictionary<string, List<string>> named = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         private readonly List<string> positional = new List<string>();
 

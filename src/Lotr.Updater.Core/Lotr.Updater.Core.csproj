@@ -17,4 +17,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Lotr.Updater.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Production release keys (CONTRACTS §3): every Security/Keys/*.pub.pem is embedded and trusted. Release builds of the
+         exe fail without one (src/Lotr.Updater/Lotr.Updater.csproj, CheckProductionKey). -->
+    <EmbeddedResource Include="Security\Keys\*.pub.pem" LogicalName="trusted-keys/%(Filename)%(Extension)" />
+    <None Include="Security\Keys\README.txt" />
+  </ItemGroup>
 </Project>

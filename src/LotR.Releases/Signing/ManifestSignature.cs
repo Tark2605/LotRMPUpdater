@@ -72,7 +72,7 @@ namespace LotR.Releases.Signing
     /// <code>{"schema":1,"signatures":[{"alg":"ES256","keyId":"&lt;sha256 of SPKI, hex&gt;","sig":"&lt;base64 r||s, 64 bytes&gt;"}]}</code>
     /// Several signatures are allowed (key rotation: sign with old and new key during the overlap). A manifest is
     /// accepted when at least one signature verifies with a trusted key.
-    /// REVIEW-AFTER(sig-format): this .sig JSON format is defined here; fold it into CONTRACTS §3 so the updater matches.
+    /// Format accepted in CONTRACTS §8 (15/10). The same file format signs files/updater/latest.json (latest.json.sig).
     /// </summary>
     public static class ManifestSignature
     {

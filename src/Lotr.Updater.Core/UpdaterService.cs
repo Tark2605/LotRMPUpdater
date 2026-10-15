@@ -17,6 +17,7 @@ using Lotr.Updater.Core.Objects;
 using Lotr.Updater.Core.Planning;
 using Lotr.Updater.Core.Schedule;
 using Lotr.Updater.Core.Security;
+using Lotr.Updater.Core.SelfUpdate;
 
 namespace Lotr.Updater.Core
 {
@@ -31,6 +32,8 @@ namespace Lotr.Updater.Core
         public List<string> TrustedKeysPem { get; } = new List<string>(TrustedKeys.Production);
         public bool AllowUnsigned { get; set; }
         public int Connections { get; set; } = 3;
+        /// <summary>Path of the running exe (self-update compares its Authenticode signer with the new one's).</summary>
+        public string CurrentExe { get; set; }
     }
 
     public sealed class CheckResult
@@ -49,7 +52,8 @@ namespace Lotr.Updater.Core
     public sealed class UpdaterService
     {
         public UpdaterService(UpdaterConfig config, UpdaterPaths paths = null, IFileSystem fs = null, HttpClient http = null, IGameLocator locator = null,
-            IProcessProbe processes = null, ILockingProcessFinder lockFinder = null, IManifestVerifier verifier = null, RetryPolicy retry = null)
+            IProcessProbe processes = null, ILockingProcessFinder lockFinder = null, IManifestVerifier verifier = null, RetryPolicy retry = null,
+            IAuthenticodeInspector authenticode = null)
         {
             Config = config;
             Paths = paths ?? UpdaterPaths.Default();
@@ -68,7 +72,10 @@ namespace Lotr.Updater.Core
             Planner = new InstallPlanner(Fs, Hashes, Store, Source, Paths, Log);
             Engine = new InstallEngine(Fs, Paths, Store, Source, Queue, Hashes, processes ?? new SystemProcessProbe(), lockFinder, Log,
                 new EngineOptions { Connections = config.Connections });
+            SelfUpdate = new SelfUpdater(Endpoints, Fetcher, Paths, config.TrustedKeysPem, authenticode, Log, config.AppVersion, config.CurrentExe);
         }
+
+        public SelfUpdater SelfUpdate { get; }
 
         public UpdaterConfig Config { get; }
         public UpdaterPaths Paths { get; }

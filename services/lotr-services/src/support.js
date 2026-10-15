@@ -35,7 +35,7 @@ function normaliseCode(input) {
 // JSON-escaped C:\\Users\\x\\, \\?\C:\Users\x, /c/Users/x (MSYS), Z:\home\x\ and /home/x/ (Wine/Proton).
 // A name followed by a separator may contain spaces ("Jean Dupont"); at the end of a path it stops at
 // whitespace or a quote. Shared folders (Public, Default, All Users) and placeholders are left alone.
-// REVIEW-AFTER(mask-placeholder): CONTRACTS does not name the updater's placeholder; <user>, %USERNAME%, ***, {user}
+// The updater masks with the same placeholder (<user>, Lotr.Updater.Core LogMasker); <user>, %USERNAME%, ***, {user}
 // and $USER are treated as already masked, and this pass writes <user>.
 const MASK = '<user>';
 const KEEP = new Set(['public', 'default', 'default user', 'all users', 'defaultapppool']);
@@ -67,8 +67,8 @@ function maskUserPaths(text) {
 }
 
 // --- log header summary --------------------------------------------------------------------------------------
-// REVIEW-AFTER(updater-log-header): the updater's log header format is not fixed in CONTRACTS yet. Read
-// "Key: value" or "key=value" lines among the first 60, and count ERROR/FATAL lines when no error count is given.
+// The updater's support log starts with "App version:", "Store:", "Errors:" lines (UpdaterService.BuildSupportLog).
+// Read "Key: value" or "key=value" lines among the first 60, and count ERROR/FATAL lines when no error count is given.
 const HEADER_KEYS = {
     appversion: 'appVersion', version: 'appVersion', updaterversion: 'appVersion', updater: 'appVersion',
     store: 'store', detectedstore: 'store', gamestore: 'store', platform: 'store',

@@ -4,7 +4,7 @@
     LotRMPServices, listening on 127.0.0.1:3010 only, and adds its routes to the public Caddy site.
 
 .DESCRIPTION
-    REVIEW-AFTER(deploy-wiring): DRAFT written by the services workstream to match the site deploy package
+    Reference copy (merged into the site deploy package by the site pass, 15/10). Written by the services workstream to match the site deploy package
     conventions (site\deploy\package). It is meant to be copied to site\deploy\package\Install-Services.ps1 together
     with the service source in site\deploy\package\services\lotr-services\ (src\, package.json, package-lock.json,
     config.example.json) and the Caddy route block of DEPLOY.md merged into lib\SiteDeploy.Services.ps1.
