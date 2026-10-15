@@ -195,6 +195,49 @@ namespace LotR.GameDetection.Tests.Bench
             return true;
         }
 
+        /// <summary>Folders the temp-file probe ran in (the probe file is created and removed, like FILE_FLAG_DELETE_ON_CLOSE).</summary>
+        public List<string> ProbedDirectories { get; } = new List<string>();
+
+        public bool? ProbeWriteWithTempFile(string directory, out string detail)
+        {
+            if (!DirectoryExists(directory))
+            {
+                detail = "The folder does not exist.";
+                return null;
+            }
+            ProbedDirectories.Add(PathUtil.Normalize(directory));
+            var resolved = Resolve(directory);
+            if (_unreadableAcl.Any(a => PathUtil.IsUnder(resolved, a)) || _deniedWrite.Any(d => PathUtil.IsUnder(resolved, d)))
+            {
+                detail = "fake temp-file probe: access denied";
+                return false;
+            }
+            // create then delete-on-close: the tree is unchanged afterwards
+            var probe = PathUtil.Combine(directory, ".lotr-write-probe-" + Guid.NewGuid().ToString("N") + ".tmp");
+            AddFile(probe, Array.Empty<byte>());
+            Delete(probe);
+            detail = "fake temp-file probe: created and removed";
+            return true;
+        }
+
+        /// <summary>Every path in the tree (directories end with '\'), for "nothing changed" assertions.</summary>
+        public List<string> Snapshot()
+        {
+            var result = new List<string>();
+            void Walk(Node n, string path)
+            {
+                foreach (var c in n.Children.Values.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    var p = path + "\\" + c.Name;
+                    result.Add(c.IsDir ? p + "\\" : p + " (" + (c.Data?.Length ?? 0) + ")");
+                    if (c.IsDir) Walk(c, p);
+                }
+            }
+            foreach (var d in _drives.OrderBy(d => d.Key))
+                Walk(d.Value, d.Value.Name);
+            return result;
+        }
+
         public IReadOnlyList<string> GetFixedDriveRoots() =>
             _drives.Keys.Select(d => PathUtil.Normalize(d)).Where(d => !_nonFixedDrives.Contains(d)).OrderBy(d => d).ToList();
 
@@ -244,6 +287,7 @@ namespace LotR.GameDetection.Tests.Bench
 
         private Node GetOrCreate(string normalized, bool dir)
         {
+            normalized = Resolve(normalized); // writing below a junction writes into its target
             var parts = normalized.Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
             if (!_drives.TryGetValue(parts[0], out var node))
             {

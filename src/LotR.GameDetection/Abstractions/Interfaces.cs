@@ -58,6 +58,13 @@ namespace LotR.GameDetection.Abstractions
         /// </summary>
         bool? CheckWriteAccess(string directory, out string detail);
 
+        /// <summary>
+        /// Write probe: creates a uniquely named 0-byte file in <paramref name="directory"/> with delete-on-close semantics and
+        /// closes it immediately, so nothing is left behind. True = created, false = denied, null = undetermined.
+        /// The only method of this interface allowed to touch the disk.
+        /// </summary>
+        bool? ProbeWriteWithTempFile(string directory, out string detail);
+
         /// <summary>Roots of the fixed (non-removable, non-network) drives, e.g. "C:\".</summary>
         IReadOnlyList<string> GetFixedDriveRoots();
     }

@@ -4,7 +4,7 @@ using System.Text;
 
 namespace LotR.GameDetection.Windows
 {
-    /// <summary>Win32 imports. Everything here is read-only (queries, no writes).</summary>
+    /// <summary>Win32 imports. Everything here is read-only (queries), except the delete-on-close write probe flags.</summary>
     internal static class NativeMethods
     {
         internal const uint FILE_READ_ATTRIBUTES = 0x0080;
@@ -26,6 +26,17 @@ namespace LotR.GameDetection.Windows
         internal const uint FILE_ADD_SUBDIRECTORY = 0x0004;
 
         internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        // write probe only
+        internal const uint GENERIC_WRITE = 0x40000000;
+        internal const uint DELETE = 0x00010000;
+        internal const uint CREATE_NEW = 1;
+        internal const uint FILE_ATTRIBUTE_HIDDEN = 0x2;
+        internal const uint FILE_ATTRIBUTE_TEMPORARY = 0x100;
+        internal const uint FILE_FLAG_DELETE_ON_CLOSE = 0x04000000;
+        internal const int ERROR_ACCESS_DENIED = 5;
+        internal const int ERROR_WRITE_PROTECT = 19;
+        internal const int ERROR_FILE_EXISTS = 80;
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct GENERIC_MAPPING

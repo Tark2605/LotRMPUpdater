@@ -95,7 +95,7 @@ namespace LotR.GameDetection.Tests.Bench
     /// </summary>
     public static class LnkBuilder
     {
-        public static byte[] Build(string target, string workingDir = null, string relativePath = null, string envTarget = null, bool withLinkInfo = true)
+        public static byte[] Build(string target, string workingDir = null, string relativePath = null, string envTarget = null, bool withLinkInfo = true, string arguments = null)
         {
             using (var ms = new MemoryStream())
             using (var w = new BinaryWriter(ms))
@@ -104,6 +104,7 @@ namespace LotR.GameDetection.Tests.Bench
                 if (withLinkInfo) flags |= 0x2;
                 if (relativePath != null) flags |= 0x8;
                 if (workingDir != null) flags |= 0x10;
+                if (arguments != null) flags |= 0x20;
                 if (envTarget != null) flags |= 0x200;
 
                 w.Write(0x4Cu);
@@ -150,6 +151,7 @@ namespace LotR.GameDetection.Tests.Bench
                 }
                 if (relativePath != null) WriteString(relativePath);
                 if (workingDir != null) WriteString(workingDir);
+                if (arguments != null) WriteString(arguments);
 
                 if (envTarget != null)
                 {

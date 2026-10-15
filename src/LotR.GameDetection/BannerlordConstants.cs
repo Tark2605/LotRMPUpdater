@@ -30,20 +30,57 @@ namespace LotR.GameDetection
         public const string SteamDefaultInstallDir = "Mount & Blade II Bannerlord";
         public const string SteamUninstallKey = "Steam App 261550";
 
-        /// <summary>GOG product id (gogdb.org/product/1564781494).</summary>
+        /// <summary>GOG product id of the game (https://www.gogdb.org/product/1564781494).</summary>
         public const string GogProductId = "1564781494";
 
+        /// <summary>GOG "package" id of the same game (https://www.gogdb.org/product/1802539526); also listed by BUTR's Vortex extension.</summary>
+        public const string GogPackageId = "1802539526";
+
+        public static readonly string[] GogIds = { GogProductId, GogPackageId };
+
         /// <summary>
-        /// Epic AppName. Community reports name both the Epic install folder and the Legendary/Heroic id "Chickadee";
-        /// not confirmed from an official source, so the Epic source also matches on DisplayName / executable.
+        /// Epic AppName (catalog codename), as used by BUTR's Vortex extension (EPICAPP_ID) and by Legendary/Heroic.
+        /// Not published by Epic or TaleWorlds, so the Epic source also matches on DisplayName / executable.
         /// </summary>
         public const string EpicAppName = "Chickadee";
+
+        /// <summary>
+        /// Xbox PC / Microsoft Store package name (start of the package full name), from BUTR's Vortex extension
+        /// (https://github.com/BUTR/game-mount-and-blade2/blob/master/src/common.ts, XBOX_ID).
+        /// </summary>
+        public const string XboxPackageName = "TaleWorldsEntertainment.MountBladeIIBannerlord";
+
+        /// <summary>
+        /// Xbox builds are launched through Launcher.Native.exe (BUTR's Vortex extension, BANNERLORD_EXE_XBOX). Accepted as an
+        /// anchor in bin\Gaming.Desktop.x64_Shipping_Client only, and only when Bannerlord.exe is absent there.
+        /// </summary>
+        public const string XboxFallbackExecutable = "Launcher.Native.exe";
+
+        /// <summary>
+        /// Store marker files TaleWorlds ships in Modules\Native, as tested by BLSE's PlatformHelper
+        /// (https://github.com/BUTR/Bannerlord.BLSE/blob/master/src/Bannerlord.BLSE.Shared/Utils/PlatformHelper.cs).
+        /// Xbox (GDK) builds have appxmanifest.xml in the game root instead.
+        /// </summary>
+        public const string SteamTargetFile = "steam.target";
+        public const string GogTargetFile = "gog.target";
+        public const string EpicTargetFile = "epic.target";
+
+        public static bool IsGogId(string id)
+        {
+            foreach (var g in GogIds)
+            {
+                if (string.Equals(g, id, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
 
         /// <summary>Process names (without .exe) whose main module lives in bin\&lt;platform&gt;.</summary>
         public static readonly string[] ProcessNames =
         {
             "Bannerlord",
             "Bannerlord.Native",
+            "Launcher.Native",
             "TaleWorlds.MountAndBlade.Launcher",
             "Bannerlord.BLSE.Standalone",
             "Bannerlord.BLSE.Launcher",

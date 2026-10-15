@@ -240,7 +240,7 @@ namespace LotR.GameDetection.Sources
                 {
                     var key = games + "\\" + id;
                     var name = ctx.RegString(RegistryHiveKind.LocalMachine, view, key, "gameName");
-                    if (id != BannerlordConstants.GogProductId && !BannerlordConstants.MatchesName(name))
+                    if (!BannerlordConstants.IsGogId(id) && !BannerlordConstants.MatchesName(name))
                         continue;
                     var path = ctx.RegString(RegistryHiveKind.LocalMachine, view, key, "path");
                     var exe = ctx.RegString(RegistryHiveKind.LocalMachine, view, key, "exe");
@@ -291,7 +291,7 @@ namespace LotR.GameDetection.Sources
                 {
                     bool named = BannerlordConstants.MatchesName(PathUtil.GetFileName(game));
                     // Unnamed folders are probed silently (cheap: one file check) in case the folder was renamed.
-                    if (!named && !ctx.Fs.FileExists(PathUtil.Combine(game, "Content", "bin", BannerlordConstants.BinXbox, BannerlordConstants.GameExecutable)))
+                    if (!named && new GameRootResolver(ctx.Fs).FindGameExecutables(PathUtil.Combine(game, "Content")).Count == 0)
                         continue;
                     list.Add(new Candidate(game, Kind, $"Xbox games folder {g.Key} (from {g.Value})", GameStore.Xbox, claimed: named));
                 }
@@ -300,7 +300,7 @@ namespace LotR.GameDetection.Sources
             const string packages = @"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
             foreach (var pkg in ctx.Registry.GetSubKeyNames(RegistryHiveKind.CurrentUser, RegistryViewKind.Default, packages))
             {
-                if (!BannerlordConstants.MatchesName(pkg))
+                if (!pkg.StartsWith(BannerlordConstants.XboxPackageName, StringComparison.OrdinalIgnoreCase) && !BannerlordConstants.MatchesName(pkg))
                     continue;
                 var root = ctx.RegString(RegistryHiveKind.CurrentUser, RegistryViewKind.Default, packages + "\\" + pkg, "PackageRootFolder");
                 if (!string.IsNullOrEmpty(root))
@@ -354,7 +354,17 @@ namespace LotR.GameDetection.Sources
                         ctx.Rejections.Add(new RejectedCandidate(lnk, Kind, "shortcut " + lnk, RejectionReason.ShortcutUnreadable, "The shortcut could not be read: " + target.Error));
                     continue;
                 }
-                bool targetIsGame = BannerlordConstants.IsGameExecutableName(PathUtil.GetFileName(target.TargetPath));
+                var targetName = PathUtil.GetFileName(target.TargetPath);
+                bool targetIsGame = BannerlordConstants.IsGameExecutableName(targetName);
+
+                // Store launcher shortcuts: "steam.exe -applaunch 261550", "EpicGamesLauncher.exe com.epicgames.launcher://..."
+                var launcherStore = StoreFromLauncherShortcut(targetName, target.Arguments);
+                if (launcherStore != GameStore.Unknown)
+                {
+                    StoreLookup(ctx, launcherStore, $"shortcut {lnk} -> {target.TargetPath} {target.Arguments}".TrimEnd(), list);
+                    continue;
+                }
+
                 if (!named && !targetIsGame)
                     continue;
                 list.Add(new Candidate(target.TargetPath, Kind, $"shortcut {lnk} -> {target.TargetPath}", GameStore.Unknown, claimed: true));
@@ -367,18 +377,95 @@ namespace LotR.GameDetection.Sources
                 catch { continue; }
                 if (link == null)
                     continue;
-                if (link.StartsWith("steam://", StringComparison.OrdinalIgnoreCase) && link.IndexOf(BannerlordConstants.SteamAppId, StringComparison.Ordinal) >= 0)
-                    ctx.Hints.Add($"Steam shortcut to Bannerlord: {url} ({link}) - the game is (or was) installed with Steam.");
-                else if (link.StartsWith("com.epicgames.launcher://", StringComparison.OrdinalIgnoreCase) && BannerlordConstants.MatchesName(link + " " + PathUtil.GetFileName(url)))
-                    ctx.Hints.Add($"Epic shortcut to Bannerlord: {url} ({link}) - the game is (or was) installed with Epic.");
-                else if (link.StartsWith("goggalaxy://", StringComparison.OrdinalIgnoreCase) && link.IndexOf(BannerlordConstants.GogProductId, StringComparison.Ordinal) >= 0)
-                    ctx.Hints.Add($"GOG Galaxy shortcut to Bannerlord: {url} ({link}).");
+                var store = StoreFromUrl(link, PathUtil.GetFileName(url));
+                if (store == GameStore.Unknown)
+                {
+                    if (link.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var path = Uri.TryCreate(link, UriKind.Absolute, out var u) && u.IsFile ? u.LocalPath : null;
+                        if (path != null && (BannerlordConstants.IsGameExecutableName(PathUtil.GetFileName(path)) || BannerlordConstants.MatchesName(PathUtil.GetFileName(url))))
+                            list.Add(new Candidate(path, Kind, $"internet shortcut {url} -> {link}", GameStore.Unknown, claimed: true));
+                    }
+                    continue;
+                }
+                StoreLookup(ctx, store, $"internet shortcut {url} ({link})", list);
             }
 
             if (depth >= MaxDepth)
                 return;
             foreach (var sub in ctx.Fs.EnumerateDirectories(dir))
                 Walk(ctx, sub, depth + 1, list);
+        }
+
+        /// <summary>Store a launcher URL points to, when it is a Bannerlord URL (steam://rungameid/261550, com.epicgames.launcher://apps/...Chickadee..., goggalaxy://openGameView/1564781494).</summary>
+        internal static GameStore StoreFromUrl(string link, string shortcutName)
+        {
+            if (string.IsNullOrEmpty(link))
+                return GameStore.Unknown;
+            if (link.StartsWith("steam://", StringComparison.OrdinalIgnoreCase) && ContainsId(link, BannerlordConstants.SteamAppId))
+                return GameStore.Steam;
+            if (link.StartsWith("com.epicgames.launcher://", StringComparison.OrdinalIgnoreCase)
+                && (link.IndexOf(BannerlordConstants.EpicAppName, StringComparison.OrdinalIgnoreCase) >= 0 || BannerlordConstants.MatchesName(Uri.UnescapeDataString(link) + " " + shortcutName)))
+                return GameStore.Epic;
+            if (link.StartsWith("goggalaxy://", StringComparison.OrdinalIgnoreCase) && BannerlordConstants.GogIds.Any(g => ContainsId(link, g)))
+                return GameStore.Gog;
+            return GameStore.Unknown;
+        }
+
+        internal static GameStore StoreFromLauncherShortcut(string targetFileName, string arguments)
+        {
+            if (string.IsNullOrEmpty(arguments) || string.IsNullOrEmpty(targetFileName))
+                return GameStore.Unknown;
+            if (string.Equals(targetFileName, "steam.exe", StringComparison.OrdinalIgnoreCase) && ContainsId(arguments, BannerlordConstants.SteamAppId))
+                return GameStore.Steam;
+            if (targetFileName.StartsWith("EpicGamesLauncher", StringComparison.OrdinalIgnoreCase))
+                return StoreFromUrl(arguments.Trim().Trim('"'), string.Empty) == GameStore.Epic ? GameStore.Epic : GameStore.Unknown;
+            if (targetFileName.StartsWith("GalaxyClient", StringComparison.OrdinalIgnoreCase) && BannerlordConstants.GogIds.Any(g => ContainsId(arguments, g)))
+                return GameStore.Gog;
+            return GameStore.Unknown;
+        }
+
+        /// <summary>True when <paramref name="id"/> appears as a whole number in <paramref name="text"/> (2615500 does not match 261550).</summary>
+        private static bool ContainsId(string text, string id)
+        {
+            int idx = 0;
+            while ((idx = text.IndexOf(id, idx, StringComparison.Ordinal)) >= 0)
+            {
+                bool before = idx == 0 || !char.IsDigit(text[idx - 1]);
+                bool after = idx + id.Length >= text.Length || !char.IsDigit(text[idx + id.Length]);
+                if (before && after)
+                    return true;
+                idx += id.Length;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// A store shortcut does not contain a path: ask that store where Bannerlord is installed and record the result
+        /// as found through the shortcut (store hint kept). Nothing found = a hint only (the game may have been uninstalled).
+        /// </summary>
+        private void StoreLookup(DiscoveryContext ctx, GameStore store, string origin, List<Candidate> list)
+        {
+            IDiscoverySource source;
+            switch (store)
+            {
+                case GameStore.Steam: source = new SteamSource(); break;
+                case GameStore.Epic: source = new EpicSource(); break;
+                case GameStore.Gog: source = new GogSource(); break;
+                default: return;
+            }
+            IReadOnlyList<Candidate> found;
+            try { found = source.Discover(ctx); }
+            catch (Exception ex) { ctx.Hints.Add($"{origin}: {store} lookup failed: {ex.Message}"); return; }
+
+            var claimed = found.Where(c => c.Claimed).ToList();
+            if (claimed.Count == 0)
+            {
+                ctx.Hints.Add($"{store} shortcut to Bannerlord found ({origin}), but {store} does not list an installed copy (uninstalled, or installed for another Windows user?).");
+                return;
+            }
+            foreach (var c in claimed)
+                list.Add(new Candidate(c.Path, Kind, $"{origin} -> {store} lookup: {c.Detail}", store, claimed: true));
         }
     }
 
@@ -424,7 +511,7 @@ namespace LotR.GameDetection.Sources
 
                     var hint = GameStore.Unknown;
                     if (sub.Equals(BannerlordConstants.SteamUninstallKey, StringComparison.OrdinalIgnoreCase)) hint = GameStore.Steam;
-                    else if (sub.StartsWith(BannerlordConstants.GogProductId, StringComparison.OrdinalIgnoreCase)) hint = GameStore.Gog;
+                    else if (BannerlordConstants.GogIds.Any(g => sub.StartsWith(g, StringComparison.OrdinalIgnoreCase))) hint = GameStore.Gog;
 
                     var hiveName = scope.Key == RegistryHiveKind.LocalMachine ? "HKLM" : "HKCU";
                     list.Add(new Candidate(loc, Kind, $@"{hiveName}\{key} ({scope.Value}) ""{name}""", hint, claimed: isGame));
@@ -460,7 +547,8 @@ namespace LotR.GameDetection.Sources
         {
             var list = new List<Candidate>();
             int budget = ctx.Options.DeepScanMaxDirectories;
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // folder -> remaining depth it was explored with (a folder first seen at the edge of a shallow scan is explored again deeper)
+            var visited = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var drive in ctx.Fs.GetFixedDriveRoots())
             {
@@ -478,23 +566,26 @@ namespace LotR.GameDetection.Sources
             return list;
         }
 
-        private void Scan(DiscoveryContext ctx, string root, int maxDepth, List<Candidate> list, HashSet<string> visited, ref int budget)
+        private void Scan(DiscoveryContext ctx, string root, int maxDepth, List<Candidate> list, Dictionary<string, int> visited, ref int budget)
         {
+            var resolver = new GameRootResolver(ctx.Fs);
             var queue = new Queue<KeyValuePair<string, int>>();
             queue.Enqueue(new KeyValuePair<string, int>(root, 0));
             while (queue.Count > 0 && budget > 0)
             {
                 var item = queue.Dequeue();
-                if (!visited.Add(item.Key))
+                int remaining = maxDepth - item.Value;
+                bool seen = visited.TryGetValue(item.Key, out var before);
+                if (seen && before >= remaining)
                     continue;
-                budget--;
+                visited[item.Key] = remaining;
+                if (!seen)
+                    budget--;
 
-                var bin = PathUtil.Combine(item.Key, "bin");
-                if (ctx.Fs.DirectoryExists(bin)
-                    && (ctx.Fs.FileExists(PathUtil.Combine(bin, BannerlordConstants.BinWin64, BannerlordConstants.GameExecutable))
-                        || ctx.Fs.FileExists(PathUtil.Combine(bin, BannerlordConstants.BinXbox, BannerlordConstants.GameExecutable))))
+                if (resolver.FindGameExecutables(item.Key).Count > 0)
                 {
-                    list.Add(new Candidate(item.Key, Kind, $"deep scan of {root}", GameStore.Unknown, claimed: true));
+                    if (!seen)
+                        list.Add(new Candidate(item.Key, Kind, $"deep scan of {root}", GameStore.Unknown, claimed: true));
                     continue; // do not descend into a game
                 }
 

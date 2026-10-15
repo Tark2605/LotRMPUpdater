@@ -11,7 +11,9 @@ namespace LotR.GameDetection
     /// <summary>
     /// Runs every discovery source, validates each candidate (anchor on Bannerlord.exe, walk up to the root,
     /// require Modules\Native\SubModule.xml), de-duplicates by canonical path and returns a report.
-    /// Strictly read-only: nothing on disk or in the registry is created, modified or deleted.
+    /// Read-only: nothing on disk or in the registry is created, modified or deleted. The single exception is the
+    /// default Modules write probe (<see cref="WriteProbeMode.TempFile"/>): a 0-byte delete-on-close file that is gone
+    /// before Detect returns. Use <see cref="WriteProbeMode.AccessCheck"/> or <see cref="WriteProbeMode.None"/> to avoid even that.
     /// </summary>
     public sealed class GameDetector
     {
@@ -84,7 +86,10 @@ namespace LotR.GameDetection
             var report = new DetectionReport();
             report.SourcesRun.Add(DiscoverySource.Manual);
             var sw = Stopwatch.StartNew();
-            Build(new[] { new Candidate(path, DiscoverySource.Manual, "chosen by the player") }, options, report);
+            if (PathUtil.Normalize(path) == null)
+                report.Rejected.Add(new RejectedCandidate(path ?? string.Empty, DiscoverySource.Manual, "chosen by the player", RejectionReason.PathNotFound, "No folder was chosen."));
+            else
+                Build(new[] { new Candidate(path, DiscoverySource.Manual, "chosen by the player") }, options, report);
             report.Duration = sw.Elapsed;
             return report;
         }
@@ -112,12 +117,13 @@ namespace LotR.GameDetection
                         continue;
                     var reason = res.Reason;
                     var message = res.Message;
-                    if (c.Source == DiscoverySource.Shortcut && reason == RejectionReason.PathNotFound)
+                    if (c.Source == DiscoverySource.Shortcut && c.StoreHint == GameStore.Unknown && reason == RejectionReason.PathNotFound)
                     {
                         reason = RejectionReason.ShortcutBroken;
                         message = "The shortcut points to a folder that no longer exists (game moved, renamed or uninstalled).";
                     }
-                    var rk = pathKey + "|" + c.Source + "|" + reason;
+                    // one rejection per path and reason: the most reliable source reports it (candidates are sorted by source)
+                    var rk = pathKey + "|" + reason;
                     if (rejectedKeys.Add(rk))
                         report.Rejected.Add(new RejectedCandidate(PathUtil.Normalize(c.Path), c.Source, c.Detail, reason, message));
                     continue;
@@ -183,6 +189,13 @@ namespace LotR.GameDetection
                 markers.Add(new KeyValuePair<GameStore, string>(GameStore.Epic, ".egstore folder in the game folder"));
             if (fs.EnumerateFiles(root, "goggame-*.info").Any())
                 markers.Add(new KeyValuePair<GameStore, string>(GameStore.Gog, "goggame-*.info in the game folder"));
+            var native = PathUtil.Combine(root, BannerlordConstants.ModulesFolder, BannerlordConstants.NativeModule);
+            if (fs.FileExists(PathUtil.Combine(native, BannerlordConstants.SteamTargetFile)))
+                markers.Add(new KeyValuePair<GameStore, string>(GameStore.Steam, @"Modules\Native\steam.target"));
+            if (fs.FileExists(PathUtil.Combine(native, BannerlordConstants.EpicTargetFile)))
+                markers.Add(new KeyValuePair<GameStore, string>(GameStore.Epic, @"Modules\Native\epic.target"));
+            if (fs.FileExists(PathUtil.Combine(native, BannerlordConstants.GogTargetFile)))
+                markers.Add(new KeyValuePair<GameStore, string>(GameStore.Gog, @"Modules\Native\gog.target"));
             if (markers.Count == 0 && string.Equals(inst.BinFolderName, BannerlordConstants.BinXbox, StringComparison.OrdinalIgnoreCase))
                 markers.Add(new KeyValuePair<GameStore, string>(GameStore.Xbox, "only the Xbox binaries (Gaming.Desktop.x64_Shipping_Client) contain Bannerlord.exe"));
 
@@ -269,7 +282,10 @@ namespace LotR.GameDetection
                 inst.WriteCheckDetail = "not checked";
                 return;
             }
-            inst.IsWritable = _sys.FileSystem.CheckWriteAccess(inst.ModulesPath, out var detail);
+            string detail;
+            inst.IsWritable = mode == WriteProbeMode.TempFile
+                ? _sys.FileSystem.ProbeWriteWithTempFile(inst.ModulesPath, out detail)
+                : _sys.FileSystem.CheckWriteAccess(inst.ModulesPath, out detail);
             inst.WriteCheckDetail = detail;
             if (inst.IsWritable == false && !inst.IsProtectedLocation)
                 inst.Warnings.Add("Your Windows account cannot write to the Modules folder. The updater never asks for administrator rights: move the game to a folder you own (e.g. a Steam library outside Program Files) or ask the PC owner to grant you write access to Modules.");

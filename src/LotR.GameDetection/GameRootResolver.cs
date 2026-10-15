@@ -42,7 +42,9 @@ namespace LotR.GameDetection
             string start;
             if (_fs.FileExists(path))
             {
-                if (string.Equals(PathUtil.GetFileName(path), BannerlordConstants.GameExecutable, StringComparison.OrdinalIgnoreCase))
+                var fileName = PathUtil.GetFileName(path);
+                if (string.Equals(fileName, BannerlordConstants.GameExecutable, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fileName, BannerlordConstants.XboxFallbackExecutable, StringComparison.OrdinalIgnoreCase))
                     anchorExe = path;
                 start = PathUtil.GetParent(path);
             }
@@ -122,6 +124,13 @@ namespace LotR.GameDetection
                 var exe = PathUtil.Combine(bin, preferred, BannerlordConstants.GameExecutable);
                 if (_fs.FileExists(exe))
                     result.Add(exe);
+            }
+            // Xbox builds start through Launcher.Native.exe; accept it there only when no Bannerlord.exe was found at all.
+            if (result.Count == 0)
+            {
+                var xbox = PathUtil.Combine(bin, BannerlordConstants.BinXbox, BannerlordConstants.XboxFallbackExecutable);
+                if (_fs.FileExists(xbox))
+                    result.Add(xbox);
             }
             // Other bin folders (Win64_Shipping_wEditor of the Modding Kit, BLSE helpers...) are not the game client.
             return result;

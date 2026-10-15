@@ -28,12 +28,20 @@ namespace LotR.GameDetection
     }
 
     /// <summary>
-    /// How the Modules write access is checked. The detection library is strictly read-only, so there is
-    /// no "create a temp file" mode here: the installer (phase 3) does that right before it writes anyway.
+    /// How the Modules write access is checked. This is the ONLY place where the detection library may touch the disk,
+    /// and only in TempFile mode.
     /// </summary>
     public enum WriteProbeMode
     {
-        /// <summary>Windows AccessCheck of the folder security descriptor against the user's token. Nothing is written.</summary>
+        /// <summary>
+        /// Default. Creates a uniquely named, hidden, 0-byte temporary file in Modules with FILE_FLAG_DELETE_ON_CLOSE and closes it at once:
+        /// Windows removes it when the handle closes (even if the process crashes), and the detector checks it is gone.
+        /// This is the real answer (ACLs, integrity level, Controlled Folder Access, read-only media...). Never elevated.
+        /// </summary>
+        TempFile,
+
+        /// <summary>Windows AccessCheck of the folder security descriptor against the user's token. Nothing is written, but
+        /// Controlled Folder Access, read-only volumes or filter drivers are not seen.</summary>
         AccessCheck,
 
         /// <summary>Do not check (IsWritable stays null).</summary>
@@ -180,7 +188,7 @@ namespace LotR.GameDetection
 
     public sealed class DetectionOptions
     {
-        public WriteProbeMode WriteProbe { get; set; } = WriteProbeMode.AccessCheck;
+        public WriteProbeMode WriteProbe { get; set; } = WriteProbeMode.TempFile;
 
         /// <summary>Opt-in slow scan of fixed drives (common game roots only, depth limited).</summary>
         public bool DeepScan { get; set; }

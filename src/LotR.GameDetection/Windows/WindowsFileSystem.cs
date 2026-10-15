@@ -10,7 +10,8 @@ using LotR.GameDetection.Abstractions;
 namespace LotR.GameDetection.Windows
 {
     /// <summary>
-    /// Real file system. Strictly read-only: no method creates, modifies or deletes anything.
+    /// Real file system. Read-only, with one exception: <see cref="ProbeWriteWithTempFile"/> creates a 0-byte
+    /// delete-on-close file that Windows removes as soon as its handle is closed.
     /// Paths are passed to Win32 with the \\?\ prefix so long paths (&gt; 260 chars) work on .NET Framework too.
     /// </summary>
     public sealed class WindowsFileSystem : IFileSystem
@@ -139,6 +140,55 @@ namespace LotR.GameDetection.Windows
                 if (impersonation != IntPtr.Zero) NativeMethods.CloseHandle(impersonation);
                 if (processToken != IntPtr.Zero) NativeMethods.CloseHandle(processToken);
             }
+        }
+
+        public bool? ProbeWriteWithTempFile(string directory, out string detail)
+        {
+            if (!DirectoryExists(directory))
+            {
+                detail = "The folder does not exist.";
+                return null;
+            }
+
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                var name = ".lotr-write-probe-" + Guid.NewGuid().ToString("N") + ".tmp";
+                var file = PathUtil.Combine(directory, name);
+                IntPtr h = NativeMethods.CreateFileW(PathUtil.ToExtended(file), NativeMethods.GENERIC_WRITE | NativeMethods.DELETE, 0, IntPtr.Zero,
+                    NativeMethods.CREATE_NEW,
+                    NativeMethods.FILE_ATTRIBUTE_HIDDEN | NativeMethods.FILE_ATTRIBUTE_TEMPORARY | NativeMethods.FILE_FLAG_DELETE_ON_CLOSE,
+                    IntPtr.Zero);
+                if (h == NativeMethods.INVALID_HANDLE_VALUE)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    if (err == NativeMethods.ERROR_FILE_EXISTS)
+                        continue; // astronomically unlikely GUID clash: try another name
+                    if (err == NativeMethods.ERROR_ACCESS_DENIED || err == NativeMethods.ERROR_WRITE_PROTECT)
+                    {
+                        detail = "Temp-file probe: Windows refused to create a file here (" + new Win32Exception(err).Message.Trim()
+                                 + "). The updater never asks for administrator rights. Nothing was left behind.";
+                        return false;
+                    }
+                    detail = "Temp-file probe failed: " + new Win32Exception(err).Message.Trim();
+                    return null;
+                }
+
+                // Closing the handle deletes the file (FILE_FLAG_DELETE_ON_CLOSE); a crash closes it too.
+                NativeMethods.CloseHandle(h);
+                if (FileExists(file))
+                {
+                    // Should never happen; best effort removal of OUR file only.
+                    try { File.Delete(PathUtil.ToExtended(file)); } catch { /* reported below */ }
+                    detail = FileExists(file)
+                        ? "Temp-file probe: a 0-byte file was created but could not be removed: " + file
+                        : "Temp-file probe: the current user can create files here (probe file removed).";
+                    return true;
+                }
+                detail = "Temp-file probe: the current user can create files here (a 0-byte delete-on-close file was created and is already gone).";
+                return true;
+            }
+            detail = "Temp-file probe: could not pick a free file name.";
+            return null;
         }
 
         public IReadOnlyList<string> GetFixedDriveRoots()
