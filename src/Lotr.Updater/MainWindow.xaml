@@ -1,0 +1,465 @@
+<Window x:Class="Lotr.Updater.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Lotr.Updater.ViewModels"
+        Title="LotR MP Event — Updater" Width="1060" Height="700" MinWidth="880" MinHeight="600"
+        Background="{StaticResource Night}" WindowStartupLocation="CenterScreen"
+        Icon="Resources/app.ico" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
+        FontFamily="{StaticResource BodyFont}" Foreground="{StaticResource Parchment}">
+    <Window.Resources>
+        <vm:VisibleWhen x:Key="Vis"/>
+        <vm:VisibleWhen x:Key="NotVis" Invert="True"/>
+        <vm:PageIs x:Key="PageIs"/>
+
+        <!-- coloured badge for an issue / verify row -->
+        <DataTemplate x:Key="IssueTemplate">
+            <Border x:Name="row" BorderThickness="2,0,0,0" BorderBrush="{StaticResource Gold}" Background="#0DC9A45C" Padding="12,8" Margin="0,0,0,6">
+                <DockPanel>
+                    <TextBlock x:Name="tag" DockPanel.Dock="Left" Width="86" Text="{Binding Severity}" FontFamily="{StaticResource DisplayFont}" FontSize="11" Foreground="{StaticResource Gold}" Margin="0,2,8,0"/>
+                    <TextBlock Text="{Binding Text}" Style="{StaticResource Body}" FontSize="13"/>
+                </DockPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Severity}" Value="blocker"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Rubric}"/><Setter TargetName="row" Property="Background" Value="#1AE0563A"/><Setter TargetName="tag" Property="Foreground" Value="{StaticResource Rubric}"/><Setter TargetName="tag" Property="Text" Value="must fix"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="warning"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Ember}"/><Setter TargetName="tag" Property="Foreground" Value="#E89A5C"/><Setter TargetName="tag" Property="Text" Value="note"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="missing"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Rubric}"/><Setter TargetName="tag" Property="Foreground" Value="{StaticResource Rubric}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="different"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Ember}"/><Setter TargetName="tag" Property="Foreground" Value="#E89A5C"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="duplicate"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Ember}"/><Setter TargetName="tag" Property="Foreground" Value="#E89A5C"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="fixed"><Setter TargetName="row" Property="BorderBrush" Value="{StaticResource Elven}"/><Setter TargetName="tag" Property="Foreground" Value="{StaticResource Elven}"/></DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <Style x:Key="PageScroll" TargetType="ScrollViewer">
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Padding" Value="40,30,40,30"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{StaticResource PageGlow}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="232"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Dev banner -->
+        <Border Grid.ColumnSpan="2" Background="#3A1408" Padding="12,5" Visibility="{Binding IsDev, Converter={StaticResource Vis}}">
+            <TextBlock Text="{Binding DevBanner}" FontFamily="{StaticResource MonoFont}" FontSize="11" Foreground="#FF9C6E" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+        </Border>
+
+        <!-- Sidebar -->
+        <Border Grid.Row="1" Background="{StaticResource Pitch}" BorderBrush="{StaticResource Iron}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="22,26,18,22">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="Resources/app-256.png" Width="46" Height="46" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <StackPanel Margin="12,2,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="LotR MP Event" FontFamily="{StaticResource DisplayFont}" FontSize="16" Foreground="{StaticResource GoldBright}" TextWrapping="NoWrap"/>
+                            <TextBlock Text="UPDATER" FontFamily="{StaticResource DisplayFont}" FontSize="10" Foreground="{StaticResource Gold}" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Bottom" Margin="22,10,18,18">
+                    <StackPanel Orientation="Horizontal" Visibility="{Binding Busy, Converter={StaticResource Vis}}" Margin="0,0,0,10">
+                        <Ellipse Width="7" Height="7" Fill="{StaticResource GoldBright}" Margin="0,0,8,0" VerticalAlignment="Center">
+                            <Ellipse.Triggers>
+                                <EventTrigger RoutedEvent="Loaded">
+                                    <BeginStoryboard><Storyboard RepeatBehavior="Forever" AutoReverse="True"><DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.2" Duration="0:0:0.7"/></Storyboard></BeginStoryboard>
+                                </EventTrigger>
+                            </Ellipse.Triggers>
+                        </Ellipse>
+                        <TextBlock Text="{Binding BusyText}" Style="{StaticResource Muted}" FontSize="12" MaxWidth="170"/>
+                    </StackPanel>
+                    <Border Style="{StaticResource GoldRule}" Margin="0,0,0,10"/>
+                    <TextBlock Style="{StaticResource Muted}" FontSize="11.5" LineHeight="17">
+                        <Run Text="No admin rights · No service"/><LineBreak/>
+                        <Run Text="No telemetry · Signed releases"/><LineBreak/>
+                        <Run Text="Version"/> <Run Text="{Binding AppVersion, Mode=OneWay}"/>
+                    </TextBlock>
+                </StackPanel>
+
+                <StackPanel>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Home" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Home}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Update plan" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Plan}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Progress &amp; log" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Progress}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Verify my install" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Verify}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Support" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Support}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="Settings" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=Settings}"/>
+                    <RadioButton Style="{StaticResource NavButton}" Content="What this app does" IsChecked="{Binding Page, Converter={StaticResource PageIs}, ConverterParameter=About}"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- ============================== HOME ============================== -->
+        <ScrollViewer Grid.Row="1" Grid.Column="1" Style="{StaticResource PageScroll}" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Home}">
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource Kicker}" Text="THE WEEKLY BATTLE OF MIDDLE-EARTH"/>
+                <Border x:Name="statusBar" BorderThickness="3,0,0,0" Padding="20,4,0,4" Margin="0,4,0,20">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="BorderBrush" Value="{StaticResource Gold}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="ok"><Setter Property="BorderBrush" Value="{StaticResource Elven}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="update"><Setter Property="BorderBrush" Value="{StaticResource GoldBright}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="missing"><Setter Property="BorderBrush" Value="{StaticResource GoldBright}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="error"><Setter Property="BorderBrush" Value="{StaticResource Rubric}"/></DataTrigger>
+                                <DataTrigger Binding="{Binding StatusKind}" Value="checking"><Setter Property="BorderBrush" Value="{StaticResource Iron}"/></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel>
+                        <TextBlock Text="{Binding StatusTitle}" FontFamily="{StaticResource DisplayFont}" FontSize="32" Foreground="{StaticResource Bone}"/>
+                        <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Lead}" Margin="0,6,0,0" Visibility="{Binding StatusDetail, Converter={StaticResource Vis}}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                            <Button Style="{StaticResource PrimaryButton}" Command="{Binding ReviewCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource Vis}, ConverterParameter=update}" Content="Update…"/>
+                            <Button Style="{StaticResource PrimaryButton}" Command="{Binding ReviewCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource Vis}, ConverterParameter=missing}" Content="Install the mod…"/>
+                            <Button x:Name="launchPrimary" Style="{StaticResource PrimaryButton}" Command="{Binding LaunchCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource Vis}, ConverterParameter=ok}" Content="Launch Bannerlord"/>
+                            <Button Command="{Binding LaunchCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource NotVis}, ConverterParameter=ok}" Content="Launch Bannerlord" Padding="20,12"/>
+                            <Button Command="{Binding AcceptRollbackCommand}" Content="Accept the rollback" Margin="0,0,12,0" Padding="20,12" Visibility="{Binding RollbackOffered, Converter={StaticResource Vis}}"/>
+                            <Button Style="{StaticResource LinkButton}" Command="{Binding CheckCommand}" Content="Check again" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            <TextBlock Text="{Binding LastCheck}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0" FontSize="12"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding LaunchHint}" Style="{StaticResource Muted}" Margin="0,10,0,0" FontSize="12"/>
+                    </StackPanel>
+                </Border>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource H2}" Text="YOUR GAME"/>
+                            <TextBlock Text="{Binding GameTitle}" Style="{StaticResource Body}" FontSize="16" Foreground="{StaticResource Bone}"/>
+                            <TextBlock Style="{StaticResource Muted}" Margin="0,4,0,0" Visibility="{Binding GameStore, Converter={StaticResource Vis}}">
+                                <Run Text="{Binding GameStore, Mode=OneWay}" Foreground="{StaticResource Gold}"/><Run Text=" · "/><Run Text="{Binding GamePath, Mode=OneWay}"/>
+                            </TextBlock>
+                            <TextBlock Text="{Binding GameNote}" Style="{StaticResource Body}" Foreground="#E89A5C" FontSize="13" Margin="0,8,0,0" Visibility="{Binding GameNote, Converter={StaticResource Vis}}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource H2}" Text="NEXT BATTLE"/>
+                            <TextBlock Text="{Binding Countdown}" FontFamily="{StaticResource DisplayFont}" FontSize="24" Foreground="{StaticResource GoldBright}"/>
+                            <TextBlock Text="{Binding NextBattle}" Style="{StaticResource Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Style="{StaticResource Body}" FontSize="12.5" Foreground="#E89A5C" Margin="0,8,0,0" Visibility="{Binding BattleSoon, Converter={StaticResource Vis}}"
+                                       Text="Battle day: the app checks for updates every 20 minutes while it is open."/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="INSTALLED ON THIS PC"/>
+                        <TextBlock Style="{StaticResource Muted}" Text="No LotR module installed by this app yet." Visibility="{Binding Modules.Count, Converter={StaticResource NotVis}}"/>
+                        <ItemsControl ItemsSource="{Binding Modules}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="0,0,0,8">
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Detail}" Style="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Style="{StaticResource Body}" FontSize="15">
+                                            <Run Text="{Binding Name, Mode=OneWay}" Foreground="{StaticResource Bone}"/>
+                                            <Run Text="{Binding Version, Mode=OneWay}" Foreground="{StaticResource Gold}"/>
+                                        </TextBlock>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border Background="#12C9A45C" Padding="12,9" Margin="0,6,0,0" Visibility="{Binding TickHint, Converter={StaticResource Vis}}">
+                            <TextBlock Text="{Binding TickHint}" Style="{StaticResource Body}" FontSize="13"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Visibility="{Binding ReleaseNotes, Converter={StaticResource Vis}}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="WHAT'S NEW"/>
+                        <TextBlock Text="{Binding ReleaseNotes}" Style="{StaticResource Body}"/>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" FontSize="12"><Run Text="✓ " Foreground="{StaticResource Elven}"/><Run Text="{Binding SignatureText, Mode=OneWay}"/></TextBlock>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ============================== PLAN ============================== -->
+        <Grid Grid.Row="1" Grid.Column="1" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Plan}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Style="{StaticResource PageScroll}">
+                <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                    <TextBlock Style="{StaticResource Kicker}" Text="UPDATE PLAN · NOTHING HAPPENS BEFORE YOU CLICK"/>
+                    <TextBlock Style="{StaticResource Title}" Text="{Binding PlanTitle}" Visibility="{Binding HasPlan, Converter={StaticResource Vis}}"/>
+                    <TextBlock Style="{StaticResource Title}" Text="No plan yet" Visibility="{Binding HasPlan, Converter={StaticResource NotVis}}"/>
+                    <TextBlock Style="{StaticResource Lead}" Text="Press Update on the Home page (or Repair on Verify): the exact list of changes appears here first." Visibility="{Binding HasPlan, Converter={StaticResource NotVis}}"/>
+                    <TextBlock Style="{StaticResource Lead}" Text="{Binding PlanNote}" Visibility="{Binding HasPlan, Converter={StaticResource Vis}}" Margin="0,0,0,18"/>
+
+                    <ItemsControl ItemsSource="{Binding PlanIssues}" ItemTemplate="{StaticResource IssueTemplate}" Margin="0,0,0,10"/>
+
+                    <Border Style="{StaticResource Card}" Visibility="{Binding HasPlan, Converter={StaticResource Vis}}">
+                        <ItemsControl ItemsSource="{Binding PlanFacts}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,3">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="190"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Label}" FontFamily="{StaticResource DisplayFont}" FontSize="12" Foreground="{StaticResource Gold}" Margin="0,2,0,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource Body}" FontSize="13.5"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+
+                    <ItemsControl ItemsSource="{Binding PlanModules}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" FontFamily="{StaticResource DisplayFont}" FontSize="16" Foreground="{StaticResource GoldBright}"/>
+                                        <TextBlock Text="{Binding Folder}" Style="{StaticResource Mono}" Margin="0,3,0,2"/>
+                                        <TextBlock Text="{Binding Summary}" Style="{StaticResource Muted}"/>
+                                        <Expander IsExpanded="{Binding Expanded, Mode=OneTime}" Margin="0,8,0,0" Foreground="{StaticResource Gold}" Visibility="{Binding Files, Converter={StaticResource Vis}}">
+                                            <Expander.Header>
+                                                <TextBlock Text="Show every file" Style="{StaticResource Body}" FontSize="13" Foreground="{StaticResource Gold}"/>
+                                            </Expander.Header>
+                                            <ListBox ItemsSource="{Binding Files}" MaxHeight="260" Background="{StaticResource Pitch}" BorderBrush="{StaticResource Iron}" Margin="0,6,0,0"
+                                                     VirtualizingPanel.IsVirtualizing="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemContainerStyle>
+                                                    <Style TargetType="ListBoxItem">
+                                                        <Setter Property="Padding" Value="8,2"/>
+                                                        <Setter Property="Focusable" Value="False"/>
+                                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    </Style>
+                                                </ListBox.ItemContainerStyle>
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <DockPanel>
+                                                            <TextBlock x:Name="k" Text="{Binding Kind}" Width="64" Style="{StaticResource Mono}" Foreground="{StaticResource Elven}"/>
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Size}" Style="{StaticResource Mono}" Margin="10,0,0,0"/>
+                                                            <TextBlock Text="{Binding Path}" Style="{StaticResource Mono}" Foreground="{StaticResource Parchment}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                                        </DockPanel>
+                                                        <DataTemplate.Triggers>
+                                                            <DataTrigger Binding="{Binding Kind}" Value="replace"><Setter TargetName="k" Property="Foreground" Value="{StaticResource GoldBright}"/></DataTrigger>
+                                                            <DataTrigger Binding="{Binding Kind}" Value="remove"><Setter TargetName="k" Property="Foreground" Value="{StaticResource Rubric}"/></DataTrigger>
+                                                        </DataTemplate.Triggers>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </Expander>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Row="1" Background="{StaticResource Pitch}" BorderBrush="{StaticResource Iron}" BorderThickness="0,1,0,0" Padding="40,14" Visibility="{Binding HasPlan, Converter={StaticResource Vis}}">
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding InstallCommand}" Content="Install now"/>
+                    <Button Command="{Binding NavigateCommand}" CommandParameter="Home" Content="Not now" Margin="12,0,0,0"/>
+                    <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="18,0,0,0" FontSize="12" Text="Close Bannerlord and its launcher first."/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ============================== PROGRESS ============================== -->
+        <Grid Grid.Row="1" Grid.Column="1" Margin="40,30,40,24" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Progress}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel MaxWidth="900" HorizontalAlignment="Stretch">
+                <TextBlock Style="{StaticResource Kicker}" Text="PROGRESS"/>
+                <TextBlock Style="{StaticResource Title}" Text="{Binding ProgressTitle}"/>
+                <ProgressBar Value="{Binding ProgressValue, Mode=OneWay}" Maximum="1" Margin="0,12,0,8"/>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Command="{Binding CancelCommand}" Content="Cancel" Visibility="{Binding Busy, Converter={StaticResource Vis}}"/>
+                    <TextBlock Text="{Binding ProgressDetail}" Style="{StaticResource Muted}" VerticalAlignment="Center"/>
+                </DockPanel>
+            </StackPanel>
+            <Border Grid.Row="1" x:Name="resultBox" Padding="14,10" Margin="0,14,0,0" BorderThickness="2,0,0,0"
+                    Visibility="{Binding ProgressResult, Converter={StaticResource Vis}}">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{StaticResource Elven}"/>
+                        <Setter Property="Background" Value="#149CC28A"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ProgressResultKind}" Value="error"><Setter Property="BorderBrush" Value="{StaticResource Rubric}"/><Setter Property="Background" Value="#1AE0563A"/></DataTrigger>
+                            <DataTrigger Binding="{Binding ProgressResultKind}" Value="warn"><Setter Property="BorderBrush" Value="{StaticResource Ember}"/><Setter Property="Background" Value="#14B3471D"/></DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Text="{Binding ProgressResult}" Style="{StaticResource Body}"/>
+            </Border>
+            <DockPanel Grid.Row="2" Margin="0,18,0,0">
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Command="{Binding OpenLogsCommand}" Content="Open the logs folder"/>
+                    <TextBlock Style="{StaticResource H2}" Text="LIVE LOG" Margin="0"/>
+                </DockPanel>
+                <TextBox x:Name="LiveLog" Style="{StaticResource LogBox}" Text="{Binding LogText, Mode=OneWay}"/>
+            </DockPanel>
+        </Grid>
+
+        <!-- ============================== VERIFY ============================== -->
+        <ScrollViewer Grid.Row="1" Grid.Column="1" Style="{StaticResource PageScroll}" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Verify}">
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource Kicker}" Text="VERIFY MY INSTALL"/>
+                <TextBlock Style="{StaticResource Title}" Text="Is everything in order?"/>
+                <TextBlock Style="{StaticResource Lead}" Text="{Binding VerifySummary}" Margin="0,0,0,18"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding VerifyCommand}" Content="Verify now"/>
+                    <Button Command="{Binding RepairCommand}" Content="Repair…" Margin="12,0,0,0" Padding="20,12"/>
+                    <Button Style="{StaticResource LinkButton}" Command="{Binding OpenModulesCommand}" Content="Open the Modules folder" Margin="18,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding VerifyRows}" ItemTemplate="{StaticResource IssueTemplate}"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ============================== SUPPORT ============================== -->
+        <Grid Grid.Row="1" Grid.Column="1" Margin="40,30,40,24" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Support}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource Kicker}" Text="SUPPORT"/>
+                <TextBlock Style="{StaticResource Title}" Text="Something is wrong? Send us your log"/>
+                <TextBlock Style="{StaticResource Lead}" Margin="0,0,0,14"
+                           Text="Below is exactly what would be sent — your Windows user name is replaced by &lt;user&gt;. Nothing is sent unless you press the button. You get a short code: paste it in your ticket on the LotR Discord, the team's bot attaches the log there."/>
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding SendSupportCommand}" Content="Send to support"/>
+                    <Button Command="{Binding CopyLogCommand}" Content="Copy log" Margin="12,0,0,0" Padding="20,12"/>
+                    <Button Style="{StaticResource LinkButton}" Command="{Binding RefreshLogCommand}" Content="Refresh" Margin="18,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+            </StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,14,0,0">
+                <Border Background="#17C9A45C" BorderBrush="{StaticResource Gold}" BorderThickness="1" Padding="18,12" Visibility="{Binding SupportCode, Converter={StaticResource Vis}}" HorizontalAlignment="Left">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Muted}" Text="Your support code" FontSize="12"/>
+                        <TextBox Text="{Binding SupportCode, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource DisplayFont}" FontSize="28" Foreground="{StaticResource GoldBright}" Background="Transparent" BorderThickness="0" Padding="0"/>
+                        <TextBlock Style="{StaticResource Body}" FontSize="13" Text="On Discord: open a ticket, then type /support code: followed by this code. The log is deleted after the team reads it."/>
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="{Binding SupportStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" Visibility="{Binding SupportStatus, Converter={StaticResource Vis}}"/>
+            </StackPanel>
+            <TextBox Grid.Row="2" Style="{StaticResource LogBox}" Text="{Binding SupportLog, Mode=OneWay}" Margin="0,14,0,0"/>
+        </Grid>
+
+        <!-- ============================== SETTINGS ============================== -->
+        <ScrollViewer Grid.Row="1" Grid.Column="1" Style="{StaticResource PageScroll}" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=Settings}">
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource Kicker}" Text="SETTINGS"/>
+                <TextBlock Style="{StaticResource Title}" Text="Your preferences" Margin="0,0,0,18"/>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="GAME FOLDER"/>
+                        <TextBlock Text="{Binding GamePathSetting}" Style="{StaticResource Mono}" FontSize="13" Foreground="{StaticResource Parchment}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Command="{Binding BrowseGameCommand}" Content="Choose another folder…"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding SettingsMessage}" Style="{StaticResource Muted}" Margin="0,8,0,0" Visibility="{Binding SettingsMessage, Converter={StaticResource Vis}}"/>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Several copies of the game? Pick the one you start for the event (Steam, Epic, GOG or the Xbox app)."/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="RELEASE CHANNEL"/>
+                        <RadioButton GroupName="ch" IsChecked="{Binding IsStable}" Margin="0,0,0,8">
+                            <TextBlock Style="{StaticResource Body}"><Run Text="Stable" Foreground="{StaticResource Bone}"/><Run Text=" — what the event server runs. Recommended." Foreground="{StaticResource Dust}"/></TextBlock>
+                        </RadioButton>
+                        <RadioButton GroupName="ch" IsChecked="{Binding IsBeta}">
+                            <TextBlock Style="{StaticResource Body}"><Run Text="Beta" Foreground="{StaticResource Bone}"/><Run Text=" — test builds for testers; may not match the event server." Foreground="{StaticResource Dust}"/></TextBlock>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="BACKGROUND DOWNLOAD"/>
+                        <CheckBox IsChecked="{Binding PreDownload}">
+                            <TextBlock Style="{StaticResource Body}" Text="Download new releases in advance while this app is open (after a random delay of up to 6 hours, so that not everyone downloads at once). Installing still waits for your click."/>
+                        </CheckBox>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="BACKUP AND REMOVAL"/>
+                        <TextBlock Style="{StaticResource Body}" Text="Files replaced by the last update are kept until the next one." Margin="0,0,0,10"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Command="{Binding OpenBackupCommand}" Content="Open the backup folder"/>
+                            <Button Command="{Binding UninstallCommand}" Content="Uninstall this app…" Margin="12,0,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ============================== ABOUT ============================== -->
+        <ScrollViewer Grid.Row="1" Grid.Column="1" Style="{StaticResource PageScroll}" Visibility="{Binding Page, Converter={StaticResource Vis}, ConverterParameter=About}">
+            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Style="{StaticResource Kicker}" Text="TRANSPARENCY"/>
+                <TextBlock Style="{StaticResource Title}" Text="What this app does — and does not"/>
+                <TextBlock Style="{StaticResource Lead}" Margin="0,0,0,18"
+                           Text="It keeps the LotR MP Event mod files identical to the release the team signed. It needs no administrator rights, installs no service, runs only while its window is open, and sends no telemetry."/>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="FOLDERS IT TOUCHES"/>
+                        <ItemsControl ItemsSource="{Binding Folders}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,3">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Label}" FontFamily="{StaticResource DisplayFont}" FontSize="12" Foreground="{StaticResource Gold}" Margin="0,2,0,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource Body}" FontSize="13.5"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="It never edits the launcher's settings: you tick the modules yourself. It never writes outside the folders above."/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="EVERY NETWORK ADDRESS IT CAN CALL"/>
+                        <ItemsControl ItemsSource="{Binding Endpoints}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding}" Style="{StaticResource Mono}" Margin="0,2"/></DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Requests carry only the app name and version (User-Agent). The download queue and the support code use a random install id, nothing else."/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="HOW YOU KNOW THE FILES ARE GENUINE"/>
+                        <TextBlock Style="{StaticResource Body}" Text="Each release's file list is signed by the team (ECDSA P-256). Every file is checked against its SHA-256 before it is installed. Trusted key fingerprint(s) — compare with the Security page of the website:"/>
+                        <ItemsControl ItemsSource="{Binding Fingerprints}" Margin="0,8,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding}" Style="{StaticResource Mono}" Foreground="{StaticResource GoldBright}" Margin="0,2"/></DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding Scans}" ItemTemplate="{StaticResource IssueTemplate}" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="LICENCE AND VERSION"/>
+                        <TextBlock Style="{StaticResource Body}">
+                            <Run Text="LotRMPUpdater"/> <Run Text="{Binding AppVersion, Mode=OneWay}"/><Run Text=" · made by the LotR MP Event team for its players · source available on request from the team."/>
+                        </TextBlock>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" Text="Includes ZstdSharp (MIT licence, © Oleg Stepanischev). Mount &amp; Blade II: Bannerlord is a trademark of TaleWorlds Entertainment; this is a fan project, not affiliated with TaleWorlds."/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

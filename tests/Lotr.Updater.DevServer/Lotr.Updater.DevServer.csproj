@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Dev tool: builds a FAKE release + fake game in a temp folder and serves it locally (never the real game, never a real server). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>lotr-updater-devserver</AssemblyName>
+    <RootNamespace>Lotr.Updater.DevServer</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Lotr.Updater.Core\Lotr.Updater.Core.csproj" />
+    <Compile Include="..\Lotr.Updater.Tests\Support\ReleaseBuilder.cs" Link="Support\ReleaseBuilder.cs" />
+    <Compile Include="..\Lotr.Updater.Tests\Support\TestHttpServer.cs" Link="Support\TestHttpServer.cs" />
+  </ItemGroup>
+</Project>

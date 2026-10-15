@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Install engine of the LotR MP Event updater (docs/CONTRACTS.md §2-§6). No third-party dependency:
+       netstandard2.0 for the tests/tools, net48 for the WPF exe (avoids facade DLLs next to the single exe). -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <RootNamespace>Lotr.Updater.Core</RootNamespace>
+    <AssemblyName>Lotr.Updater.Core</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Manifest model/validation, signatures, zstd transport, FastCDC chunk indexes, install-side planner (workstream C). -->
+    <ProjectReference Include="..\LotR.Releases\LotR.Releases.csproj" />
+    <ProjectReference Include="..\LotR.GameDetection\LotR.GameDetection.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lotr.Updater.Tests" />
+  </ItemGroup>
+</Project>

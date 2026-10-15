@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- LotRMPUpdater.exe: the player-facing Windows app (WPF, .NET Framework 4.8 = present on every Windows 10/11).
+       Single file: every referenced DLL is embedded as a resource and loaded from memory (Program.cs). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>LotRMPUpdater</AssemblyName>
+    <RootNamespace>Lotr.Updater</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    <StartupObject>Lotr.Updater.Program</StartupObject>
+    <GenerateBindingRedirectsOutputType>false</GenerateBindingRedirectsOutputType>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Lotr.Updater.Core\Lotr.Updater.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Resource Include="Resources\app.ico" />
+    <Resource Include="Resources\app-256.png" />
+  </ItemGroup>
+  <!-- Embed every copy-local DLL (Core, GameDetection, ZstdSharp and its System.* helpers) so the exe runs alone. -->
+  <Target Name="EmbedCopyLocalAssemblies" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <EmbeddedResource Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll'">
+        <LogicalName>lib.%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+</Project>

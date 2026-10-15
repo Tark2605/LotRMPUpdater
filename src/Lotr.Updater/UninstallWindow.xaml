@@ -1,0 +1,24 @@
+<Window x:Class="Lotr.Updater.UninstallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Uninstall — LotR MP Event updater" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        Background="{StaticResource Night}" WindowStartupLocation="CenterScreen" Icon="Resources/app.ico"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" Foreground="{StaticResource Parchment}" FontFamily="{StaticResource BodyFont}">
+    <StackPanel Margin="30,26,30,24">
+        <TextBlock Style="{StaticResource Kicker}" Text="UNINSTALL"/>
+        <TextBlock Style="{StaticResource Title}" Text="Remove the updater"/>
+        <TextBlock Style="{StaticResource Lead}" Margin="0,0,0,16" Text="This removes the app, its shortcut, its download cache, logs and backup, and its entry in Windows' Installed apps. What about the mod itself?"/>
+        <RadioButton x:Name="Keep" GroupName="m" IsChecked="True" Margin="0,0,0,8">
+            <TextBlock Style="{StaticResource Body}"><Run Text="Keep the mod files" Foreground="{StaticResource Bone}"/><Run Text=" — you can still play; nothing in the game folder changes." Foreground="{StaticResource Dust}"/></TextBlock>
+        </RadioButton>
+        <RadioButton x:Name="RemoveMods" GroupName="m">
+            <TextBlock Style="{StaticResource Body}"><Run Text="Also remove the mod files" Foreground="{StaticResource Bone}"/><Run Text=" — deletes only the LotR module folders this app installed:" Foreground="{StaticResource Dust}"/></TextBlock>
+        </RadioButton>
+        <TextBlock x:Name="ModList" Style="{StaticResource Mono}" Margin="26,6,0,0"/>
+        <TextBlock x:Name="Message" Style="{StaticResource Body}" Foreground="#E89A5C" Margin="0,12,0,0" Visibility="Collapsed"/>
+        <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+            <Button x:Name="Go" Style="{StaticResource PrimaryButton}" Content="Uninstall" Click="OnUninstall"/>
+            <Button Content="Cancel" Margin="12,0,0,0" Click="OnCancel"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
