@@ -1,0 +1,16 @@
+{
+  "name": "lotr-services",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopback HTTP service for the LotR MP Event updater: Core download queue and one-time support log codes.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}

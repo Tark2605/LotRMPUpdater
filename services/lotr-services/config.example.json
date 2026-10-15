@@ -1,0 +1,36 @@
+{
+  "_comment": "Copy to <root>\\services\\lotr-services\\config.json (or pass --config <file>). Every key is optional; the values below are the defaults except root. Keys starting with _ are ignored.",
+  "host": "127.0.0.1",
+  "port": 3010,
+  "root": "C:\\www\\lotrmp",
+  "_paths": "dataDir defaults to <root>\\data, logDir to <root>\\logs\\lotr-services",
+  "trustForwardedFor": true,
+  "log": {
+    "level": "info",
+    "maxFileBytes": 10485760,
+    "keepDays": 14,
+    "console": false
+  },
+  "queue": {
+    "kinds": ["core"],
+    "maxConcurrent": 40,
+    "slotTtlSec": 180,
+    "waitTtlSec": 90,
+    "retryAfterMinSec": 5,
+    "retryAfterMaxSec": 60,
+    "maxWaitingPerIp": 6,
+    "enforcement": "advisory",
+    "_stateFile": "defaults to <dataDir>\\lotr-services\\queue-state.json",
+    "_releasesDir": "defaults to <root>\\files\\releases (the manifests tell which objects belong to role core modules)"
+  },
+  "support": {
+    "maxBodyBytes": 2097152,
+    "expiryHours": 72,
+    "purgeIntervalSec": 600,
+    "perIpPerHour": 3,
+    "perInstallPerHour": 3,
+    "codeLength": 4,
+    "_dir": "defaults to <dataDir>\\support",
+    "_secretFile": "defaults to <dataDir>\\secrets\\support-service.secret (created at first start when missing); LOTR_SUPPORT_SECRET env var wins"
+  }
+}
