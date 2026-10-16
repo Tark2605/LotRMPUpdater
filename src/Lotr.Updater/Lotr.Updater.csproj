@@ -45,5 +45,7 @@
     </ItemGroup>
     <Error Condition="'@(_LotrProductionKey)' == ''" Code="LOTR001"
            Text="No production release key embedded: put release-signing.pub.pem in src\Lotr.Updater.Core\Security\Keys\ (see docs/MANIFEST.md, Production key), or build with -p:AllowNoProductionKey=true for a test exe that refuses every release." />
+    <Error Condition="'$(LotrBaseUrl)' == ''" Code="LOTR002"
+           Text="No production server: build with -p:LotrBaseUrl=https://&lt;your-domain&gt; (tools/Build-Updater.ps1 does it), or -p:AllowNoProductionKey=true for a test exe." />
   </Target>
 </Project>

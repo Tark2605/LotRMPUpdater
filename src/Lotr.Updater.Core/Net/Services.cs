@@ -17,8 +17,21 @@ namespace Lotr.Updater.Core.Net
             Base = new Uri(baseUrl.TrimEnd('/') + "/");
         }
 
-        // REVIEW-AFTER(services): the real domain is not bought yet (site project). Placeholder until the deploy fills it.
-        public const string ProductionBase = "https://lotrmp.example";
+        /// <summary>Placeholder used until the exe is built with -p:LotrBaseUrl=https://&lt;domain&gt;.</summary>
+        public const string PlaceholderBase = "https://lotrmp.example";
+
+        /// <summary>The production server, baked in at build time (assembly metadata "LotrBaseUrl").</summary>
+        public static readonly string ProductionBase = ReadBakedBase() ?? PlaceholderBase;
+
+        private static string ReadBakedBase()
+        {
+            foreach (var a in typeof(ServerEndpoints).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+            {
+                var m = (System.Reflection.AssemblyMetadataAttribute)a;
+                if (m.Key == "LotrBaseUrl" && !string.IsNullOrWhiteSpace(m.Value)) return m.Value.TrimEnd('/');
+            }
+            return null;
+        }
 
         public Uri Base { get; }
         public string FilesPath { get; set; } = "files/releases/";

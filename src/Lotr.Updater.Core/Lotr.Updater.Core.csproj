@@ -23,4 +23,11 @@
     <EmbeddedResource Include="Security\Keys\*.pub.pem" LogicalName="trusted-keys/%(Filename)%(Extension)" />
     <None Include="Security\Keys\README.txt" />
   </ItemGroup>
+  <!-- Production server: dotnet build -p:LotrBaseUrl=https://<domain> (tools/Build-Updater.ps1 passes it). -->
+  <ItemGroup Condition="'$(LotrBaseUrl)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>LotrBaseUrl</_Parameter1>
+      <_Parameter2>$(LotrBaseUrl)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>
