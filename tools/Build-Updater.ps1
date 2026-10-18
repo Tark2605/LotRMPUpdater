@@ -16,10 +16,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$Domain,
     [Parameter(Mandatory = $true)][string]$PublicKey,
-    [string]$OutputDir = (Join-Path $PSScriptRoot '..\..\dist\updater')
+    [string]$OutputDir
 )
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot -Parent
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path   # $PSScriptRoot is empty in param defaults on PowerShell 5.1
+$repo = Split-Path $here -Parent
+if (-not $OutputDir) { $OutputDir = Join-Path $repo '..\dist\updater' }
 
 $Domain = ($Domain.Trim().ToLowerInvariant() -replace '^https?://', '' -replace '/.*$', '')
 if ($Domain -notmatch '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') { throw "Not a domain name: $Domain" }
