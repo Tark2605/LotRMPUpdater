@@ -6,7 +6,8 @@
     1. lotr-security vt-scan  on every exec:true file of <ReleaseDir>\manifest.json  -> <ReleaseDir>\security.json
     2. lotr-security vt-scan  on the updater exe (if -UpdaterExe)                     -> same security.json
     3. lotr-security ha-scan  on the updater exe (if -UpdaterExe)                     -> same security.json
-    4. lotr-security manifest-block                                                   -> printed for the publish tool
+    4. Invoke-DefenderScan.ps1 (local Microsoft Defender, if -SourceModules)            -> <ReleaseDir>\defender.json
+    5. lotr-security manifest-block                                                   -> printed for the publish tool
     Services without an API key are skipped with a message (exit 0). Exit code 3 = run again later (quota or an
     analysis still running); progress is saved, re-running the same command resumes.
     The results stay in the unsigned sidecar security.json (CONTRACTS section 8, 15/10): the signed manifest is never
@@ -52,6 +53,14 @@ if ($UpdaterExe) {
     $h = @('ha-scan', '--file', $UpdaterExe, '--out', $out) + $common
     if ($Sandbox) { $h += '--sandbox' }
     & $Exe @h; $codes += $LASTEXITCODE
+}
+
+# Local Microsoft Defender scan of the exact published files (no key, no quota) -> <ReleaseDir>\defender.json.
+# Informational: its result is shown on the site, it never changes this script's exit code.
+if ($SourceModules) {
+    $d = @{ ReleaseDir = $ReleaseDir; SourceModules = $SourceModules }
+    if ($UpdaterExe) { $d.UpdaterExe = $UpdaterExe }
+    try { & (Join-Path $here 'Invoke-DefenderScan.ps1') @d } catch { Write-Warning "defender: $($_.Exception.Message)" }
 }
 
 if (Test-Path -LiteralPath $out) {
