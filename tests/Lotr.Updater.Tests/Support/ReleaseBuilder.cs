@@ -65,7 +65,7 @@ namespace Lotr.Updater.Testing
                     Directory.CreateDirectory(Path.GetDirectoryName(p));
                     File.WriteAllBytes(p, f.Content);
                 }
-                sources.Add(new ModuleSource { Folder = dir, Role = m.Role });
+                sources.Add(new ModuleSource { Folder = dir, Role = m.Role, WorkshopItem = m.WorkshopItem });
             }
             var now = PublishedAtUtc ?? BaseTime.AddHours(Interlocked.Increment(ref _clock));
             using (var signer = new ReleaseSigner(EcKeys.ImportPkcs8(EcKeys.ExportPkcs8(SigningKey))))
@@ -115,6 +115,8 @@ namespace Lotr.Updater.Testing
         public string Version { get; set; }
         public string Folder { get; set; }
         public string Role { get; set; }
+        /// <summary>manifest modules[].workshopItem (Steam Workshop reuse tests).</summary>
+        public string WorkshopItem { get; set; }
         public List<FileSpec> Files { get; } = new List<FileSpec>();
 
         public ModuleBuilder File(string path, byte[] content)

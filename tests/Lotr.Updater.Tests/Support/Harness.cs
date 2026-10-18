@@ -19,8 +19,22 @@ namespace Lotr.Updater.Tests
         public long? FreeSpace { get; set; }
         public Func<string, bool> ReadOnly { get; set; }
         public Func<string, string, Exception> OnMove { get; set; }
+        /// <summary>Paths whose reading fails (e.g. a locked or unreadable Steam Workshop file).</summary>
+        public Func<string, bool> Unreadable { get; set; }
+        /// <summary>Thrown when the free space is read (drive that cannot be queried).</summary>
+        public Exception FreeSpaceError { get; set; }
 
-        public override long GetAvailableFreeSpace(string path) => FreeSpace ?? base.GetAvailableFreeSpace(path);
+        public override long GetAvailableFreeSpace(string path)
+        {
+            if (FreeSpaceError != null) throw FreeSpaceError;
+            return FreeSpace ?? base.GetAvailableFreeSpace(path);
+        }
+
+        public override Stream OpenRead(string path)
+        {
+            if (Unreadable != null && Unreadable(path)) throw new IOException("The process cannot access the file '" + path + "' (simulated).");
+            return base.OpenRead(path);
+        }
 
         public override WriteProbeResult ProbeWritable(string directory) =>
             ReadOnly != null && ReadOnly(directory) ? new WriteProbeResult(false, "Access denied (simulated read-only folder)") : base.ProbeWritable(directory);

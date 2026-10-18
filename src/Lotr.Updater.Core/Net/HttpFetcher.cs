@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Lotr.Updater.Core.Install;
 using Lotr.Updater.Core.IO;
 using Lotr.Updater.Core.Logging;
 
@@ -71,6 +72,9 @@ namespace Lotr.Updater.Core.Net
 
         public static HttpClient CreateClient(string appVersion)
         {
+            // .NET Framework allows only 2 connections per host by default (ServicePointManager), which would silently cap the
+            // parallel downloads; allow at least as many as the engine may open. No effect on .NET Core (no such limit).
+            if (ServicePointManager.DefaultConnectionLimit < EngineOptions.MaxConnections) ServicePointManager.DefaultConnectionLimit = EngineOptions.MaxConnections;
             var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate, UseCookies = false };
             var c = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
             // The only identifying data ever sent: the app name and version (no telemetry).

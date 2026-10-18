@@ -38,8 +38,11 @@ namespace Lotr.Updater.Core.Install
 
     public sealed class EngineOptions
     {
-        /// <summary>Parallel HTTP connections (PLAN: 2-4).</summary>
-        public int Connections { get; set; } = 3;
+        /// <summary>Highest number of parallel HTTP connections (also the per-host limit set in <see cref="HttpFetcher.CreateClient"/>).</summary>
+        public const int MaxConnections = 8;
+        /// <summary>Parallel HTTP connections (default 6, capped at <see cref="MaxConnections"/>): the Core is ~38,000 small objects,
+        /// so latency, not bandwidth, limits a single connection.</summary>
+        public int Connections { get; set; } = 6;
         /// <summary>Free space kept on each drive on top of what the update needs.</summary>
         public long SafetyMarginBytes { get; set; } = 256L << 20;
     }
@@ -105,7 +108,8 @@ namespace Lotr.Updater.Core.Install
             if (verMsg != null) plan.Issues.Add(new PlanIssue(IssueSeverity.Warning, verMsg));
 
             foreach (var d in DuplicateModuleScanner.Scan(_fs, g, plan.Manifest))
-                plan.Issues.Add(new PlanIssue(IssueSeverity.Warning, $"Another copy of {d.Id} exists: {d.Path} ({d.Where}). In the launcher, make sure only ONE {d.Id} is ticked, or remove/unsubscribe the other copy, otherwise the game may load the wrong version."));
+                // A Workshop subscription next to our Modules copy is harmless (the game prefers Modules): informative only.
+                plan.Issues.Add(new PlanIssue(d.IsWorkshop ? IssueSeverity.Info : IssueSeverity.Warning, d.Advice));
 
             if (!plan.HasChanges) return;
 
@@ -135,6 +139,17 @@ namespace Lotr.Updater.Core.Install
 
         private void CheckSpace(InstallPlan plan)
         {
+            foreach (var problem in SpaceProblems(plan, downloadOnly: false))
+                plan.Issues.Add(new PlanIssue(IssueSeverity.Blocker, problem));
+        }
+
+        /// <summary>One sentence per drive without enough free space (empty when there is enough). <paramref name="downloadOnly"/>:
+        /// only the object cache is filled (background pre-download), the game folder and the backup are not touched. Files copied
+        /// locally (moved files, Steam Workshop copy) need room in Modules (staging) but nothing in the cache. A drive whose free
+        /// space cannot be read is logged and not blocked.</summary>
+        public List<string> SpaceProblems(InstallPlan plan, bool downloadOnly)
+        {
+            var problems = new List<string>();
             var need = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             void Add(string path, long bytes)
             {
@@ -143,18 +158,27 @@ namespace Lotr.Updater.Core.Install
                 need[root] = (need.TryGetValue(root, out var v) ? v : 0) + bytes;
             }
             Add(_paths.ObjectCache, plan.DownloadBytes);
-            Add(plan.Game.ModulesPath, plan.StagingBytes);
-            if (!_fs.SameVolume(plan.Game.ModulesPath, plan.BackupPath)) Add(plan.BackupPath, plan.BackupBytes);
+            if (!downloadOnly)
+            {
+                Add(plan.Game.ModulesPath, plan.StagingBytes);
+                if (!_fs.SameVolume(plan.Game.ModulesPath, plan.BackupPath)) Add(plan.BackupPath, plan.BackupBytes);
+            }
             foreach (var kv in need)
             {
                 long free;
                 try { free = _fs.GetAvailableFreeSpace(kv.Key); }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { continue; }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    _log?.Write(LogLevel.Warn, $"Could not read the free space of {kv.Key} ({ex.Message}); the space check is skipped for this drive.");
+                    continue;
+                }
                 long required = kv.Value + _opt.SafetyMarginBytes;
                 if (free < required)
-                    plan.Issues.Add(new PlanIssue(IssueSeverity.Blocker,
-                        $"Not enough free space on {kv.Key}: the update needs {Units.Bytes(required)} (download, temporary copy and a safety margin), {Units.Bytes(free)} is free. Free {Units.Bytes(required - free)} and try again."));
+                    problems.Add(downloadOnly
+                        ? $"Not enough free space on {kv.Key}: the download needs {Units.Bytes(required)} (download and a safety margin), {Units.Bytes(free)} is free. Free {Units.Bytes(required - free)} and try again."
+                        : $"Not enough free space on {kv.Key}: the update needs {Units.Bytes(required)} (download, temporary copy and a safety margin), {Units.Bytes(free)} is free. Free {Units.Bytes(required - free)} and try again.");
             }
+            return problems;
         }
 
         // ---------------------------------------------------------------- download
@@ -195,7 +219,7 @@ namespace Lotr.Updater.Core.Install
                 var sw = Stopwatch.StartNew();
                 long lastReport = 0;
                 var speed = new SpeedMeter();
-                _log?.Write(LogLevel.Info, $"Downloading {plan.Downloads.Count} objects, {Units.Bytes(plan.DownloadBytes)} ({_opt.Connections} connections).");
+                _log?.Write(LogLevel.Info, $"Downloading {plan.Downloads.Count} objects, {Units.Bytes(plan.DownloadBytes)} ({Math.Max(1, Math.Min(EngineOptions.MaxConnections, _opt.Connections))} connections).");
                 void OnBytes(long n)
                 {
                     long now = Interlocked.Add(ref done, n);
@@ -206,7 +230,7 @@ namespace Lotr.Updater.Core.Install
                     progress?.Report(new EngineProgress { Phase = EnginePhase.Downloading, Message = "Downloading", Done = now, Total = total, BytesPerSecond = speed.BytesPerSecond });
                 }
 
-                using (var gate = new SemaphoreSlim(Math.Max(1, Math.Min(4, _opt.Connections))))
+                using (var gate = new SemaphoreSlim(Math.Max(1, Math.Min(EngineOptions.MaxConnections, _opt.Connections))))
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     var tasks = plan.Downloads.OrderByDescending(d => d.ObjectSize).Select(async d =>

@@ -8,6 +8,7 @@ using LotR.Releases.Chunking;
 using LotR.Releases.Install;
 using LotR.Releases.Model;
 using Lotr.Updater.Core.Game;
+using Lotr.Updater.Core.Install;
 using Lotr.Updater.Core.IO;
 using Lotr.Updater.Core.Logging;
 using Lotr.Updater.Core.Model;
@@ -127,6 +128,8 @@ namespace Lotr.Updater.Core.Planning
                 }
             }
             LastChecks = checks;
+            // Steam: the Workshop copy of a module (registered last, so files already in Modules stay the preferred source).
+            var workshopRoots = AddWorkshopSources(manifest, game, checks, local, status, ct);
 
             var dp = DownloadPlanner.Compute(manifest, checks, installedManifest, obj => _store.Has(obj) ? TryParseIndex(obj, ct) : null, local);
             if (dp.NeedsIndexes) throw new ManifestException("A chunk list of this release could not be read. Try again later.");
@@ -163,6 +166,10 @@ namespace Lotr.Updater.Core.Planning
                 };
                 switch (pf.Action)
                 {
+                    case FileAction.CopyLocal:
+                        a.FromWorkshop = IsUnder(pf.LocalSource, workshopRoots);
+                        if (a.FromWorkshop) { plan.WorkshopCopiedFiles++; plan.WorkshopReusedBytes += pf.Target.Size; }
+                        break;
                     case FileAction.Download:
                     case FileAction.FromCache: // not used: the updater caches encoded objects by name
                         a.Source = FileAction.Download;
@@ -173,6 +180,7 @@ namespace Lotr.Updater.Core.Planning
                         {
                             if (l != null) plan.ReusedLocalChunks++;
                             else Need(c.Object, c.ObjectSize, c.Size, mod.IsCore());
+                            if (l != null && IsUnder(l.FullPath, workshopRoots)) { a.FromWorkshop = true; plan.WorkshopReusedBytes += c.Size; }
                         }
                         break;
                 }
@@ -187,6 +195,8 @@ namespace Lotr.Updater.Core.Planning
                 mp.Extra.RemoveAll(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
             }
             plan.ReusedLocalBytes = dp.LocalReuseBytes;
+            if (plan.WorkshopReusedBytes > 0)
+                _log?.Write(LogLevel.Info, $"Steam Workshop copy reused: {plan.WorkshopCopiedFiles} files and {Units.Bytes(plan.WorkshopReusedBytes)} copied from your Steam Workshop copy instead of downloaded (read-only, the Workshop folder is not changed).");
 
             foreach (var d in downloads.Values)
             {
@@ -196,6 +206,92 @@ namespace Lotr.Updater.Core.Planning
             }
             return plan;
         }
+
+        /// <summary>
+        /// Steam players: a subscribed Workshop copy of one of our modules (above all LotRMPCore, ~10 GB) becomes a local source.
+        /// A file with the release's size and SHA-256 is copied instead of downloaded; a big chunked file that differs gives its
+        /// parts, so only the missing ones are downloaded. Hashes go through the hash cache (one full read the first time only).
+        /// Candidates: the manifest's workshopItem folder, else every item whose SubModule.xml (root or one level deeper) has the
+        /// module Id. Strictly read-only on the Workshop folder; an unreadable file or folder is skipped, never fails the plan.
+        /// </summary>
+        /// <returns>The Workshop content folders (to tell Workshop sources from Modules ones); empty when there is none.</returns>
+        private List<string> AddWorkshopSources(ReleaseManifest manifest, GameTarget game, Dictionary<string, InstallCheck> checks, LocalContent local,
+            IProgress<string> status, CancellationToken ct)
+        {
+            var roots = SteamWorkshop.ContentFolders(_fs, game);
+            if (roots.Count == 0) return roots;
+            Dictionary<string, List<string>> byId = null; // module Id -> Workshop module folders, read on first need
+            foreach (var m in manifest.Modules)
+            {
+                ct.ThrowIfCancellationRequested();
+                checks.TryGetValue(m.Id, out var check);
+                var ok = new HashSet<string>(check?.Files.Where(x => x.State == InstalledFileState.Ok && x.ActualSha256 == x.Expected.Sha256).Select(x => x.Path)
+                    ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+                // Only what Modules does not already hold: an up-to-date install never re-reads the Workshop copy.
+                var needed = m.Files.Where(f => !ok.Contains(f.Path) && !local.TryGetFile(f.Sha256, out _)).ToList();
+                if (needed.Count == 0) continue;
+
+                var candidates = new List<string>();
+                if (!string.IsNullOrEmpty(m.WorkshopItem))
+                    foreach (var ws in roots) candidates.AddRange(SteamWorkshop.ModuleFolders(_fs, Path.Combine(ws, m.WorkshopItem)));
+                if (candidates.Count == 0)
+                {
+                    if (byId == null)
+                    {
+                        byId = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var ws in roots)
+                            foreach (var item in SteamWorkshop.Items(_fs, ws))
+                                foreach (var d in SteamWorkshop.ModuleFolders(_fs, item))
+                                {
+                                    var id = DuplicateModuleScanner.ReadModuleId(_fs, d);
+                                    if (id == null) continue;
+                                    if (!byId.TryGetValue(id, out var l)) byId[id] = l = new List<string>();
+                                    l.Add(d);
+                                }
+                    }
+                    if (byId.TryGetValue(m.Id, out var found)) candidates.AddRange(found);
+                }
+
+                var copied = new HashSet<ManifestFile>();
+                foreach (var folder in candidates)
+                {
+                    int i = 0, usable = 0;
+                    foreach (var f in needed)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (copied.Contains(f)) continue;
+                        var full = ToLocal(folder, f.Path);
+                        if (!_fs.FileExists(full)) continue;
+                        if ((++i % 50) == 0) status?.Report($"Looking for {m.DisplayName()} in your Steam Workshop copy: {i}/{needed.Count} files");
+                        try
+                        {
+                            if (_fs.GetFileLength(full) == f.Size && _hashes.Hash(full, false, ct) == f.Sha256)
+                            {
+                                local.AddFile(f.Sha256, full);
+                                copied.Add(f);
+                                usable++;
+                            }
+                            else if (f.Chunked)
+                            {
+                                // Older Workshop version of a big file: its unchanged parts are reused, only the missing ones are downloaded.
+                                status?.Report("Looking for reusable parts of " + f.Path + " in your Steam Workshop copy");
+                                local.AddChunksByScanning(full);
+                                usable++;
+                            }
+                        }
+                        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                        {
+                            _log?.Write(LogLevel.Warn, "Steam Workshop copy: skipped " + full + " (" + ex.Message + ")");
+                        }
+                    }
+                    if (usable > 0) _log?.Write(LogLevel.Info, $"Steam Workshop copy of {m.DisplayName()} found in {folder}: {usable} of {needed.Count} needed files usable.");
+                }
+            }
+            return roots;
+        }
+
+        private static bool IsUnder(string path, List<string> folders) =>
+            path != null && folders.Any(d => Path.GetFullPath(path).StartsWith(Path.GetFullPath(d).TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
 
         private ChunkIndex TryParseIndex(string obj, CancellationToken ct)
         {

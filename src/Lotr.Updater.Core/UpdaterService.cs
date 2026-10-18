@@ -23,7 +23,7 @@ namespace Lotr.Updater.Core
 {
     public sealed class UpdaterConfig
     {
-        public string AppVersion { get; set; } = "0.1.0";
+        public string AppVersion { get; set; } = "0.1.1";
         public string BaseUrl { get; set; } = ServerEndpoints.ProductionBase;
         /// <summary>Dev mode: local test server, a fixed fake game folder, extra trusted test key. Shown in red in the UI.</summary>
         public bool Dev { get; set; }
@@ -31,7 +31,7 @@ namespace Lotr.Updater.Core
         public string FixedGamePath { get; set; }
         public List<string> TrustedKeysPem { get; } = new List<string>(TrustedKeys.Production);
         public bool AllowUnsigned { get; set; }
-        public int Connections { get; set; } = 3;
+        public int Connections { get; set; } = 6;
         /// <summary>Path of the running exe (self-update compares its Authenticode signer with the new one's).</summary>
         public string CurrentExe { get; set; }
     }
@@ -271,6 +271,13 @@ namespace Lotr.Updater.Core
         {
             if (latest?.Plan == null || !latest.Plan.HasChanges || latest.Plan.Downloads.Count == 0) return false;
             if (!PreDownloadPolicy.IsDue(State, DateTime.UtcNow)) return false;
+            // Same free space rule as the install (cache drive only: the game folder is not touched yet).
+            var space = Engine.SpaceProblems(latest.Plan, downloadOnly: true);
+            if (space.Count > 0)
+            {
+                Log.Warn("Background pre-download skipped: " + space[0]);
+                return false;
+            }
             Log.Info("Pre-downloading release " + latest.Manifest.ReleaseId + " in the background (nothing is installed until you click Update).");
             await Engine.DownloadAsync(latest.Plan, State.InstallId, progress, ct).ConfigureAwait(false);
             State.PendingDownloaded = true;

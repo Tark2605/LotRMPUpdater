@@ -24,6 +24,8 @@ namespace Lotr.Updater.Core.Planning
         public FileAction Source { get; set; }
         /// <summary>CopyLocal: an existing local file with the same content.</summary>
         public string LocalSource { get; set; }
+        /// <summary>CopyLocal from (or Rebuild with parts of) the player's Steam Workshop copy of the module, read-only.</summary>
+        public bool FromWorkshop { get; set; }
         /// <summary>Rebuild: chunks in file order, each local (reused) or to download (Local == null).</summary>
         public List<(ChunkRef Chunk, LocalChunk Local)> Chunks { get; set; }
         public override string ToString() => Kind + " " + RelPath;
@@ -90,6 +92,9 @@ namespace Lotr.Updater.Core.Planning
         public bool IsBlocked => Issues.Any(i => i.Severity == IssueSeverity.Blocker);
         public long ReusedLocalBytes { get; set; }
         public int ReusedLocalChunks { get; set; }
+        /// <summary>Bytes copied from the Steam Workshop copy of a module instead of downloaded (whole files and reused parts).</summary>
+        public long WorkshopReusedBytes { get; set; }
+        public int WorkshopCopiedFiles { get; set; }
         public bool NeedsCoreSlot => Downloads.Any(d => d.IsCore);
     }
 }

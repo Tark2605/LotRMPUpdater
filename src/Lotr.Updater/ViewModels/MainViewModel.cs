@@ -485,8 +485,8 @@ namespace Lotr.Updater.ViewModels
                     Kind = a.Kind == FileActionKind.Add ? "add" : a.Kind == FileActionKind.Replace ? "replace" : "remove",
                     Path = a.RelPath,
                     Size = a.Kind == FileActionKind.Remove ? Units.Bytes(a.OldSize)
-                         : a.Source == LotR.Releases.Install.FileAction.CopyLocal ? Units.Bytes(a.Size) + " · copied from your PC"
-                         : a.Source == LotR.Releases.Install.FileAction.Rebuild ? Units.Bytes(a.Size) + $" · {a.Chunks.Count(c => c.Local != null)}/{a.Chunks.Count} parts reused"
+                         : a.Source == LotR.Releases.Install.FileAction.CopyLocal ? Units.Bytes(a.Size) + (a.FromWorkshop ? " · copied from your Steam Workshop copy" : " · copied from your PC")
+                         : a.Source == LotR.Releases.Install.FileAction.Rebuild ? Units.Bytes(a.Size) + $" · {a.Chunks.Count(c => c.Local != null)}/{a.Chunks.Count} parts reused" + (a.FromWorkshop ? " (Steam Workshop copy)" : "")
                          : Units.Bytes(a.Size),
                 }).ToList();
                 PlanModules.Add(new PlanModuleRow
@@ -502,6 +502,8 @@ namespace Lotr.Updater.ViewModels
             }
             PlanFacts.Clear();
             PlanFacts.Add(new Fact("Download", p.DownloadBytes > 0 ? Units.Bytes(p.DownloadBytes) + " in " + Plural(p.Downloads.Count, "piece") + (p.ReusedLocalChunks > 0 ? $" ({Units.Bytes(p.ReusedLocalBytes)} reused from your current files)" : "") : "Nothing — already on this PC"));
+            if (p.WorkshopReusedBytes > 0)
+                PlanFacts.Add(new Fact("Steam Workshop", Units.Bytes(p.WorkshopReusedBytes) + " copied from your Steam Workshop copy instead of downloaded (the Workshop folder is only read, never changed)"));
             PlanFacts.Add(new Fact("Temporary space", Units.Bytes(p.StagingBytes) + " inside each module folder (.lotr-staging), removed at the end"));
             PlanFacts.Add(new Fact("Backup of replaced files", p.BackupBytes > 0 ? Units.Bytes(p.BackupBytes) + " → " + p.BackupPath : "None needed (nothing is replaced)"));
             PlanFacts.Add(new Fact("Game folder", p.Game.ModulesPath));
@@ -628,14 +630,17 @@ namespace Lotr.Updater.ViewModels
             {
                 var r = await Task.Run(() => _svc.VerifyAsync(status, CancellationToken.None));
                 _repairPlan = r.RepairPlan;
-                VerifyKind = r.Healthy && r.Duplicates.Count == 0 ? "ok" : "update";
+                VerifyKind = r.Healthy && r.Duplicates.All(d => d.IsWorkshop) ? "ok" : "update";
                 VerifySummary = r.Healthy
                     ? $"All {r.Checked} files are correct." + (r.MarkOfTheWebCleared > 0 ? $" Removed the internet mark from {Plural(r.MarkOfTheWebCleared, "file")}." : "")
                     : $"{r.Ok} of {r.Checked} files are correct. {r.Missing.Count} missing, {r.Modified.Count} different. \"Repair\" shows exactly what it will fix before doing anything.";
                 foreach (var x in r.Missing.Take(200)) VerifyRows.Add(new IssueRow { Severity = "missing", Text = x });
                 foreach (var x in r.Modified.Take(200)) VerifyRows.Add(new IssueRow { Severity = "different", Text = x });
                 foreach (var x in r.Extra.Take(200)) VerifyRows.Add(new IssueRow { Severity = "extra", Text = x + "  (not part of the release; Repair removes it, with a backup)" });
-                foreach (var d in r.Duplicates) VerifyRows.Add(new IssueRow { Severity = "duplicate", Text = d.Id + " is also in " + d.Path + " (" + d.Where + "). Tick only one copy in the launcher, or remove the other one." });
+                foreach (var d in r.Duplicates)
+                    VerifyRows.Add(d.IsWorkshop
+                        ? new IssueRow { Severity = "info", Text = d.Advice } // Workshop subscription: harmless, the game uses Modules
+                        : new IssueRow { Severity = "duplicate", Text = d.Id + " is also in " + d.Path + " (" + d.Where + "). Tick only one copy in the launcher, or remove the other one." });
                 if (r.MarkOfTheWebCleared > 0) VerifyRows.Add(new IssueRow { Severity = "fixed", Text = $"Removed the \"downloaded from the internet\" mark from {Plural(r.MarkOfTheWebCleared, "file")} (Windows can refuse to load a mod DLL that carries it)." });
             }
             catch (Exception ex) when (ex is InstallException || ex is IOException || ex is Core.Net.HttpFetchException || ex is UnauthorizedAccessException)
