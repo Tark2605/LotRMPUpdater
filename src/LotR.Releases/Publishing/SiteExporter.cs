@@ -141,7 +141,7 @@ namespace LotR.Releases.Publishing
                     ["download"] = rel.CollectObjects(mod).Values.Sum(o => o.ObjectSize),
                     ["workshopItem"] = mod.WorkshopItem,
                 })),
-                ["security"] = SecuritySummary(SecuritySidecar.Load(rel.Path, warnings)),
+                ["security"] = SecuritySummary(SecuritySidecar.Load(rel.Path, warnings), SecuritySidecar.Load(rel.Path, warnings, SecuritySidecar.DefenderFileName)),
             };
         }
 
@@ -149,16 +149,40 @@ namespace LotR.Releases.Publishing
         private static List<JsonObject> Done(JsonArray entries) =>
             entries.OfType<JsonObject>().Where(e => (e["status"]?.AsString() ?? "done") == "done").ToList();
 
-        private static JsonNode SecuritySummary(JsonNode security)
+        private static JsonNode SecuritySummary(JsonNode security, JsonObject defender = null)
         {
             var s = security as JsonObject;
-            if (s == null)
+            if (s == null && defender == null)
             {
                 return JsonNull.Instance;
             }
 
+            s = s ?? new JsonObject();
             var result = new JsonObject();
             result["updatedAt"] = s["updatedAt"]?.AsString();
+            if (defender != null)
+            {
+                // Local Microsoft Defender scan of the exact published files (tools/security/Invoke-DefenderScan.ps1 -> defender.json).
+                var engine = defender["engine"] as JsonObject;
+                var u = defender["updater"] as JsonObject;
+                result["defender"] = new JsonObject
+                {
+                    ["status"] = defender["status"]?.AsString(),
+                    ["result"] = defender["result"]?.AsString(),
+                    ["scannedAt"] = defender["scannedAt"]?.AsString(),
+                    ["engineVersion"] = engine?["engineVersion"]?.AsString(),
+                    ["signatureVersion"] = engine?["signatureVersion"]?.AsString(),
+                    ["modules"] = new JsonArray((defender["modules"] as JsonArray ?? new JsonArray()).OfType<JsonObject>().Select(m => (JsonNode)new JsonObject
+                    {
+                        ["folder"] = m["folder"]?.AsString(),
+                        ["version"] = m["version"]?.AsString(),
+                        ["files"] = m["files"]?.AsLong() ?? 0,
+                        ["result"] = m["result"]?.AsString(),
+                        ["threats"] = new JsonArray((m["threats"] as JsonArray ?? new JsonArray()).Select(x => (JsonNode)new JsonString(x.AsString() ?? "?"))),
+                    })),
+                    ["updater"] = u == null ? (JsonNode)JsonNull.Instance : new JsonObject { ["file"] = u["file"]?.AsString(), ["result"] = u["result"]?.AsString() },
+                };
+            }
             if (s["virustotal"] is JsonArray vtAll)
             {
                 var vt = Done(vtAll);
@@ -222,9 +246,12 @@ namespace LotR.Releases.Publishing
     {
         public const string FileName = "security.json";
 
-        public static JsonObject Load(string releaseDir, List<string> warnings = null)
+        /// <summary>&lt;release&gt;/defender.json: local Microsoft Defender scan (tools/security/Invoke-DefenderScan.ps1), same rules.</summary>
+        public const string DefenderFileName = "defender.json";
+
+        public static JsonObject Load(string releaseDir, List<string> warnings = null, string fileName = FileName)
         {
-            string path = Path.Combine(releaseDir, FileName);
+            string path = Path.Combine(releaseDir, fileName);
             if (!File.Exists(path))
             {
                 return null;
@@ -236,7 +263,7 @@ namespace LotR.Releases.Publishing
             }
             catch (Exception e) when (e is IOException || e is FormatException)
             {
-                warnings?.Add("security.json unreadable: " + e.Message);
+                warnings?.Add(fileName + " unreadable: " + e.Message);
                 return null;
             }
         }

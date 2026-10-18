@@ -208,6 +208,21 @@ namespace LotR.Releases.Tests
                 Assert.Equal(EcKeys.FormatFingerprint(signer.KeyId), current["signature"].AsObject()["fingerprint"].AsString());
                 Assert.Equal(1, current["security"].AsObject()["virustotal"].AsObject()["files"].AsLong());
                 Assert.Equal(1, current["security"].AsObject()["virustotal"].AsObject()["pending"].AsLong());
+                Assert.Null(current["security"].AsObject()["defender"]);
+
+                // ---------- + the local Defender sidecar, exactly as Invoke-DefenderScan.ps1 writes it (PowerShell 5.1 layout)
+                File.WriteAllText(Path.Combine(r2.ReleaseDir, "defender.json"),
+                    "{\n    \"schema\":  1,\n    \"releaseId\":  \"" + r2.ReleaseId + "\",\n    \"scannedAt\":  \"2026-10-18T16:55:07Z\",\n    \"status\":  \"done\",\n    \"result\":  \"clean\",\n" +
+                    "    \"engine\":  {\n        \"product\":  \"Microsoft Defender Antivirus\",\n        \"engineVersion\":  \"1.1.26090.9\",\n        \"signatureVersion\":  \"1.461.88.0\",\n        \"signatureUpdated\":  \"2026-10-18T06:31:16Z\"\n    },\n" +
+                    "    \"modules\":  [\n        {\n            \"folder\":  \"LotRMPEvent\",\n            \"id\":  \"OrderMiddleEarthEvent\",\n            \"version\":  \"v1.0.2.3\",\n            \"files\":  2,\n            \"bytes\":  2199847,\n            \"verified\":  2,\n            \"mismatched\":  0,\n            \"missing\":  0,\n            \"result\":  \"clean\",\n            \"threats\":  [\n\n                         ],\n            \"exitCode\":  0\n        }\n    ],\n" +
+                    "    \"updater\":  {\n        \"file\":  \"LotRMPUpdater-0.1.1.exe\",\n        \"sha256\":  \"" + TestData.Sha('d') + "\",\n        \"exitCode\":  0,\n        \"threats\":  [\n\n                    ],\n        \"result\":  \"clean\"\n    },\n    \"note\":  null\n}\n");
+                var withDefender = SiteExporter.Build(releases, "stable", trusted, null)["current"].AsObject()["security"].AsObject()["defender"].AsObject();
+                Assert.Equal("clean", withDefender["result"].AsString());
+                Assert.Equal("1.461.88.0", withDefender["signatureVersion"].AsString());
+                Assert.Equal("LotRMPEvent", withDefender["modules"].AsArray()[0].AsObject()["folder"].AsString());
+                Assert.Empty(withDefender["modules"].AsArray()[0].AsObject()["threats"].AsArray());
+                Assert.Equal("clean", withDefender["updater"].AsObject()["result"].AsString());
+                File.Delete(Path.Combine(r2.ReleaseDir, "defender.json"));
                 Assert.Equal(2, site["history"].AsArray().Count);
                 Assert.True(site["updater"].IsNull);
                 string sitePath = t.Sub("site", "src", "data", "releases.json");
