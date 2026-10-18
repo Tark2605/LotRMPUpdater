@@ -24,9 +24,19 @@ $repo = Split-Path $PSScriptRoot -Parent
 $Domain = ($Domain.Trim().ToLowerInvariant() -replace '^https?://', '' -replace '/.*$', '')
 if ($Domain -notmatch '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$') { throw "Not a domain name: $Domain" }
 if (-not (Test-Path -LiteralPath $PublicKey)) { throw "Public key not found: $PublicKey" }
-$pem = Get-Content -LiteralPath $PublicKey -Raw
+$pem = "$(Get-Content -LiteralPath $PublicKey -Raw)"
 if ($pem -match 'PRIVATE KEY') { throw 'This is a PRIVATE key. Copy only release-signing.pub.pem from the server.' }
-if ($pem -notmatch 'BEGIN PUBLIC KEY') { throw 'Not a PEM public key (expected -----BEGIN PUBLIC KEY-----).' }
+if (-not $pem.Contains('-----BEGIN PUBLIC KEY-----')) { throw 'Not a PEM public key (expected -----BEGIN PUBLIC KEY-----).' }
+
+# Check the key BEFORE building: an unreadable key must never end up inside an exe.
+$publish = Get-ChildItem -Path (Join-Path $repo 'tools\LotR.Publish\bin\Release') -Recurse -Filter 'lotr-publish.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $publish) {
+    & dotnet build (Join-Path $repo 'tools\LotR.Publish') -c Release -v q -nologo
+    if ($LASTEXITCODE -ne 0) { throw "lotr-publish build failed ($LASTEXITCODE)." }
+    $publish = Get-ChildItem -Path (Join-Path $repo 'tools\LotR.Publish\bin\Release') -Recurse -Filter 'lotr-publish.exe' | Select-Object -First 1
+}
+$fingerprint = @(& $publish.FullName show-key --pub $PublicKey 2>&1 | ForEach-Object { "$_" })
+if ($LASTEXITCODE -ne 0) { throw "The public key cannot be read ($($fingerprint -join ' ')). Copy release-signing.pub.pem again from the server." }
 
 $keysDir = Join-Path $repo 'src\Lotr.Updater.Core\Security\Keys'
 Copy-Item -LiteralPath $PublicKey -Destination (Join-Path $keysDir 'release-signing.pub.pem') -Force
@@ -49,11 +59,8 @@ Set-Content -LiteralPath "$out.sha256" -Value "$hash  $(Split-Path $out -Leaf)" 
 Write-Host "[ok] $out ($([math]::Round((Get-Item $out).Length / 1MB, 2)) MB)" -ForegroundColor Green
 Write-Host "     sha256 $hash"
 Write-Host "     server https://$Domain"
-$publish = Get-ChildItem -Path (Join-Path $repo 'tools\LotR.Publish\bin') -Recurse -Filter 'lotr-publish.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($publish) {
-    Write-Host '     key fingerprint (must match the server and the Security page):'
-    & $publish.FullName show-key --pub (Join-Path $keysDir 'release-signing.pub.pem')
-}
+Write-Host '     key fingerprint (must match the server and the Security page):'
+$fingerprint | ForEach-Object { Write-Host "     $_" }
 Write-Host ''
 Write-Host 'Next, on the server:' -ForegroundColor Cyan
 Write-Host "  C:\www\lotrmp\tools\lotr-publish\lotr-publish.exe publish-updater --exe <copied exe> --root C:\www\lotrmp"
