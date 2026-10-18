@@ -20,7 +20,15 @@ internal sealed class ApiResponse
 
     public string Describe() =>
         $"HTTP {Status}" + (ErrorCode != null ? " " + ErrorCode : "") +
-        (ErrorMessage != null ? ": " + ErrorMessage : (Body != null && Doc == null ? ": " + Trim(Body) : ""));
+        (ErrorMessage != null ? ": " + ErrorMessage : (Body != null && Doc == null ? ": " + Trim(Body) : "")) +
+        ValidationErrors();
+
+    /// <summary>Hybrid Analysis answers 400 with a "validation_errors" field that says which input it refused: keep it.</summary>
+    private string ValidationErrors()
+    {
+        if (Doc == null || Root.ValueKind != JsonValueKind.Object || !Root.TryGetProperty("validation_errors", out JsonElement v)) return "";
+        return " (" + Trim(v.GetRawText()) + ")";
+    }
 
     private static string Trim(string s) => s.Length > 200 ? s.Substring(0, 200) + "..." : s;
 }
