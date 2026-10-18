@@ -53,6 +53,23 @@ const DEFAULTS = Object.freeze({
         // random value at first start when missing. The environment variable LOTR_SUPPORT_SECRET wins over it.
         secretFile: null,
     },
+    // Signed mailbox for website updates (src/site-update.js, site/docs/SITE-UPDATES.md): its own loopback listener,
+    // proxied by Caddy at /api/site-update only. Disabled (404) while publicKeyFile does not exist.
+    siteUpdate: {
+        enabled: true,
+        port: 3011,
+        // Default <dataDir>\site-update (inbox\, installed\, the public key; Update-Site.ps1 reads it too).
+        dir: null,
+        // Default <dir>\site-update.pub.pem (copied there by Install-Services.ps1 from the package's keys\ folder).
+        publicKeyFile: null,
+        maxBytes: 600 * 1024 * 1024,
+        requestTimeoutSec: 1800,
+        maxAgeDays: 7,
+        maxFutureMinutes: 60,
+        perIpPerHour: 6,
+        keepPending: 3,
+        minFreeBytes: 2 * 1024 * 1024 * 1024,
+    },
 });
 
 function deepMerge(base, extra) {
@@ -114,6 +131,12 @@ function finalize(config, file, baseDir) {
             secretFile: path.resolve(config.support.secretFile || path.join(dataDir, 'secrets', 'support-service.secret')),
         },
     };
+    const suDir = path.resolve(config.siteUpdate.dir || path.join(dataDir, 'site-update'));
+    result.siteUpdate = {
+        ...config.siteUpdate,
+        dir: suDir,
+        publicKeyFile: path.resolve(config.siteUpdate.publicKeyFile || path.join(suDir, 'site-update.pub.pem')),
+    };
     validate(result);
     return result;
 }
@@ -132,6 +155,15 @@ function validate(c) {
     if (!Number.isInteger(s.codeLength) || s.codeLength < 4 || s.codeLength > 6) problems.push('support.codeLength must be 4 to 6');
     if (!(s.maxBodyBytes > 0) || s.maxBodyBytes > 16 * 1024 * 1024) problems.push('support.maxBodyBytes must be 1 byte to 16 MB');
     if (!(s.expiryHours > 0)) problems.push('support.expiryHours must be > 0');
+    const u = c.siteUpdate;
+    if (!Number.isInteger(u.port) || u.port < 0 || u.port > 65535) problems.push('siteUpdate.port must be an integer 0-65535');
+    if (u.enabled && u.port !== 0 && u.port === c.port) problems.push('siteUpdate.port must differ from port');
+    if (!(u.maxBytes > 0)) problems.push('siteUpdate.maxBytes must be > 0');
+    if (!(u.requestTimeoutSec >= 60)) problems.push('siteUpdate.requestTimeoutSec must be >= 60');
+    if (!Number.isInteger(u.keepPending) || u.keepPending < 1) problems.push('siteUpdate.keepPending must be >= 1');
+    if (!(u.perIpPerHour >= 1)) problems.push('siteUpdate.perIpPerHour must be >= 1');
+    if (!(u.maxAgeDays > 0) || !(u.maxFutureMinutes >= 0)) problems.push('siteUpdate.maxAgeDays must be > 0 and maxFutureMinutes >= 0');
+    if (!(u.minFreeBytes >= 0)) problems.push('siteUpdate.minFreeBytes must be >= 0');
     if (problems.length) throw new Error(`Invalid configuration: ${problems.join('; ')}`);
 }
 

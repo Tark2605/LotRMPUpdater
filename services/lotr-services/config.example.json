@@ -32,5 +32,19 @@
     "codeLength": 4,
     "_dir": "defaults to <dataDir>\\support",
     "_secretFile": "defaults to <dataDir>\\secrets\\support-service.secret (created at first start when missing); LOTR_SUPPORT_SECRET env var wins"
+  },
+  "siteUpdate": {
+    "_comment": "Signed mailbox for website updates (src/site-update.js, site/docs/SITE-UPDATES.md). Own loopback listener; Caddy proxies /api/site-update to it. Disabled (404) while publicKeyFile is missing.",
+    "enabled": true,
+    "port": 3011,
+    "maxBytes": 629145600,
+    "requestTimeoutSec": 1800,
+    "maxAgeDays": 7,
+    "maxFutureMinutes": 60,
+    "perIpPerHour": 6,
+    "keepPending": 3,
+    "minFreeBytes": 2147483648,
+    "_dir": "defaults to <dataDir>\\site-update (inbox\\, installed\\, the public key)",
+    "_publicKeyFile": "defaults to <dir>\\site-update.pub.pem (copied by Install-Services.ps1 from the package keys\\ folder)"
   }
 }

@@ -14,7 +14,7 @@ const INSTALL = '0f8fad5b-d9cb-469f-a165-70867728950e';
 async function startApp(overrides = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lotr-services-'));
     const clock = { t: 1_800_000_000_000 };
-    const config = loadConfig({ argv: [], env: {}, overrides: { root, port: 0, ...overrides } });
+    const config = loadConfig({ argv: [], env: {}, overrides: { root, port: 0, siteUpdate: { port: 0 }, ...overrides } });
     const app = createApp(config, { now: () => clock.t, secret: SECRET });
     const addr = await app.start();
     const base = `http://127.0.0.1:${addr.port}`;
@@ -57,7 +57,7 @@ test('queue: slot TTL over HTTP and state survives a restart', async (t) => {
     const s = await startApp({ queue: { maxConcurrent: 1, slotTtlSec: 60, persistDebounceMs: 10 } });
     const a = await s.call('POST', '/api/queue/slot', { body: { client: 'install-aaaa' } });
     await s.stop();
-    const config = loadConfig({ argv: [], env: {}, overrides: { root: s.root, port: 0, queue: { maxConcurrent: 1, slotTtlSec: 60 } } });
+    const config = loadConfig({ argv: [], env: {}, overrides: { root: s.root, port: 0, siteUpdate: { port: 0 }, queue: { maxConcurrent: 1, slotTtlSec: 60 } } });
     const app2 = createApp(config, { now: () => s.clock.t, secret: SECRET });
     const addr = await app2.start();
     t.after(() => app2.stop());

@@ -10,6 +10,8 @@
 //   GET  /healthz                                      -> 200 { ok, ... }
 //   GET  /internal/queue/check?slot=<token>            -> forward_auth for core objects (advisory by default)
 //   GET  /internal/support/<code>   header X-LotR-Secret -> 200 record, then the code is burnt
+// Second listener (siteUpdate.port, default 127.0.0.1:3011, long request timeout): PUT /api/site-update, the signed
+// mailbox for website updates (src/site-update.js). A failure to open it never stops the routes above.
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,6 +21,7 @@ const { DownloadQueue } = require('./queue');
 const { SupportStore, RateLimiter, maskUserPaths, summariseLog, validateSubmission, normaliseCode } = require('./support');
 const { clientIp, isLoopback, isProxied, sendJson, readJson, HttpError, safeEqual } = require('./http-util');
 const { silentLogger } = require('./log');
+const { createSiteUpdate } = require('./site-update');
 
 const VERSION = require('../package.json').version;
 const SECRET_HEADER = 'x-lotr-secret';
@@ -310,26 +313,38 @@ function createApp(config, deps = {}) {
     server.requestTimeout = 60000;
     server.headersTimeout = 15000;
     server.keepAliveTimeout = 5000;
+    const siteUpdate = config.siteUpdate?.enabled ? createSiteUpdate(config, { logger: log, now: deps.now }) : null;
     let timer = null;
     return {
         ...services,
         server,
-        start() {
-            return new Promise((resolve, reject) => {
+        siteUpdate,
+        siteUpdateAddress: null,
+        async start() {
+            const addr = await new Promise((resolve, reject) => {
                 server.once('error', reject);
                 server.listen(config.port, config.host, () => {
                     services.sweep();
                     timer = setInterval(services.sweep, Math.min(config.support.purgeIntervalSec, 30) * 1000);
                     timer.unref();
-                    const addr = server.address();
-                    log.info('service.started', { host: addr.address, port: addr.port, version: VERSION, enforcement: config.queue.enforcement, maxConcurrent: config.queue.maxConcurrent });
-                    resolve(addr);
+                    const a = server.address();
+                    log.info('service.started', { host: a.address, port: a.port, version: VERSION, enforcement: config.queue.enforcement, maxConcurrent: config.queue.maxConcurrent });
+                    resolve(a);
                 });
             });
+            if (siteUpdate) {
+                try {
+                    this.siteUpdateAddress = await siteUpdate.start();
+                } catch (error) {
+                    log.error('siteupdate.listen.failed', { port: config.siteUpdate.port, error: error.code || error.message });
+                }
+            }
+            return addr;
         },
-        stop() {
+        async stop() {
             if (timer) clearInterval(timer);
             services.persistNow();
+            if (siteUpdate) await siteUpdate.stop();
             return new Promise((resolve) => {
                 server.close(() => resolve());
                 server.closeAllConnections?.();

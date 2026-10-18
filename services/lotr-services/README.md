@@ -21,8 +21,15 @@ Node.js 24, no framework, **no npm dependency at all** (the lockfile is pinned a
 | `GET /internal/queue/check` | Caddy `forward_auth` (loopback) | slot in `?slot=` or in `X-Forwarded-Uri` | `200`, or `403` in enforce mode |
 | `GET /internal/support/<code>` | Discord bot (loopback, header `X-LotR-Secret`) | | `200 { code, createdAt, expiresAt, installId, appVersion, summary, maskedServerSide, log }`, `401`, `404 unknown_code`, `410 expired / already_used`, `409 busy` |
 | `GET /healthz` | monitoring (loopback) | | `200 { ok, version, uptimeSec, queue, support }` |
+| `PUT /api/site-update` | owner's PC (`site/scripts/site-update.mjs send`), **second listener** `127.0.0.1:3011` | the deploy zip; headers `X-LotR-Update-Meta` + `X-LotR-Update-Signature` | `201 { id }`, `401` bad signature, `400` (stale, sha mismatch, bad meta), `404` no public key, `409` duplicate/busy, `413`, `429`, `507` |
+| `GET /status` | second listener, loopback only | | `200 { enabled, fingerprint, pending, busy }` |
 
 Errors are always JSON `{ "error": "<code>", "message": "..." }`.
+
+The signed mailbox for website updates (`src/site-update.js`, `siteUpdate` in the config, 30 min request timeout,
+600 MB limit) is described in `site/docs/SITE-UPDATES.md`. It only stores the zip in `<dataDir>\site-update\inbox`;
+`Update-Site.ps1` re-verifies it with `node src/site-update.js verify --zip <zip> --meta <entry.json> --pub <pem>`
+and installs it.
 
 ### Queue rules
 
