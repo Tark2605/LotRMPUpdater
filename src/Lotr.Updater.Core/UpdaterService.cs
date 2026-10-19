@@ -23,7 +23,7 @@ namespace Lotr.Updater.Core
 {
     public sealed class UpdaterConfig
     {
-        public string AppVersion { get; set; } = "0.1.1";
+        public string AppVersion { get; set; } = "0.1.2";
         public string BaseUrl { get; set; } = ServerEndpoints.ProductionBase;
         /// <summary>Dev mode: local test server, a fixed fake game folder, extra trusted test key. Shown in red in the UI.</summary>
         public bool Dev { get; set; }

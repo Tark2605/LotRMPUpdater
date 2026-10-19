@@ -109,7 +109,11 @@ namespace Lotr.Updater.Core.Install
 
             foreach (var d in DuplicateModuleScanner.Scan(_fs, g, plan.Manifest))
                 // A Workshop subscription next to our Modules copy is harmless (the game prefers Modules): informative only.
-                plan.Issues.Add(new PlanIssue(d.IsWorkshop ? IssueSeverity.Info : IssueSeverity.Warning, d.Advice));
+                plan.Issues.Add(new PlanIssue(d.IsWorkshop ? IssueSeverity.Info : IssueSeverity.Warning, d.Advice)
+                {
+                    LinkUrl = d.WorkshopPageUrl,
+                    LinkText = d.WorkshopPageUrl != null ? "Open the Workshop page" : null,
+                });
 
             if (!plan.HasChanges) return;
 

@@ -64,6 +64,9 @@ namespace Lotr.Updater.Core.Planning
         public PlanIssue(IssueSeverity severity, string text) { Severity = severity; Text = text; }
         public IssueSeverity Severity { get; }
         public string Text { get; }
+        /// <summary>Optional button next to the issue (e.g. the Workshop item page); only steam:// Workshop pages are opened.</summary>
+        public string LinkUrl { get; set; }
+        public string LinkText { get; set; }
         public override string ToString() => Severity + ": " + Text;
     }
 

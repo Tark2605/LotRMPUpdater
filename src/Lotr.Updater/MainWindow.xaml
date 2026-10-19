@@ -16,6 +16,7 @@
             <Border x:Name="row" BorderThickness="2,0,0,0" BorderBrush="{StaticResource Gold}" Background="#0DC9A45C" Padding="12,8" Margin="0,0,0,6">
                 <DockPanel>
                     <TextBlock x:Name="tag" DockPanel.Dock="Left" Width="86" Text="{Binding Severity}" FontFamily="{StaticResource DisplayFont}" FontSize="11" Foreground="{StaticResource Gold}" Margin="0,2,8,0"/>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="{Binding LinkText}" Margin="12,0,0,0" VerticalAlignment="Top" Command="{Binding DataContext.OpenLinkCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding LinkUrl}" Visibility="{Binding HasLink, Converter={StaticResource Vis}}"/>
                     <TextBlock Text="{Binding Text}" Style="{StaticResource Body}" FontSize="13"/>
                 </DockPanel>
             </Border>

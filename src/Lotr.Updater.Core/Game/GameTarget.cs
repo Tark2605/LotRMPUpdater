@@ -177,9 +177,16 @@ namespace Lotr.Updater.Core.Game
         /// the local Modules copy), so the player is told it is fine instead of being alarmed.</summary>
         public bool IsWorkshop { get; set; }
 
+        /// <summary>Workshop item number (digits only) when <see cref="IsWorkshop"/>, else null.</summary>
+        public string WorkshopItem { get; set; }
+
+        /// <summary>The item's page in the Steam client (its Unsubscribe button), built from the digits only; null otherwise.</summary>
+        public string WorkshopPageUrl =>
+            IsWorkshop && !string.IsNullOrEmpty(WorkshopItem) && WorkshopItem.All(char.IsDigit) ? "steam://url/CommunityFilePage/" + WorkshopItem : null;
+
         /// <summary>The sentence shown to the player (Plan screen and Verify my install).</summary>
         public string Advice => IsWorkshop
-            ? $"{Id} is also subscribed on the Steam Workshop ({Where}). The game uses the copy installed by the updater (Modules folder). You can keep the Workshop one or unsubscribe to save disk space."
+            ? $"{Id} is also subscribed on the Steam Workshop ({Where}). The game uses the copy installed by the updater, so we recommend unsubscribing: the launcher then lists the mod once, and an older Workshop copy can never get in the way. Nothing is downloaded again."
             : $"Another copy of {Id} exists: {Path} ({Where}). In the launcher, make sure only ONE {Id} is ticked, or remove/unsubscribe the other copy, otherwise the game may load the wrong version.";
 
         public override string ToString() => $"{Id} also in {Path} ({Where})";
@@ -259,18 +266,21 @@ namespace Lotr.Updater.Core.Game
         {
             var result = new List<DuplicateModule>();
             var ours = manifest.Modules.ToDictionary(m => m.Id, m => m.Folder, StringComparer.OrdinalIgnoreCase);
-            void Check(string folder, string where, bool workshop)
+            void Check(string folder, string where, bool workshop, string item = null)
             {
                 var id = ReadModuleId(fs, folder);
                 if (id == null || !ours.TryGetValue(id, out var expectedFolder)) return;
                 bool isTarget = !workshop && string.Equals(Path.GetFileName(folder), expectedFolder, StringComparison.OrdinalIgnoreCase);
-                if (!isTarget) result.Add(new DuplicateModule { Id = id, Path = folder, Where = where, IsWorkshop = workshop });
+                if (!isTarget) result.Add(new DuplicateModule { Id = id, Path = folder, Where = where, IsWorkshop = workshop, WorkshopItem = workshop ? item : null });
             }
             foreach (var d in SteamWorkshop.SafeDirs(fs, game.ModulesPath)) Check(d, "Modules", false);
             // <library>\steamapps\workshop\content\261550\<item>[\<Folder>]\SubModule.xml
             foreach (var ws in SteamWorkshop.ContentFolders(fs, game))
-                foreach (var item in SteamWorkshop.Items(fs, ws))
-                    foreach (var d in SteamWorkshop.ModuleFolders(fs, item)) Check(d, "Steam Workshop item " + Path.GetFileName(item), true);
+                foreach (var itemFolder in SteamWorkshop.Items(fs, ws))
+                {
+                    var item = Path.GetFileName(itemFolder.TrimEnd('\\', '/'));
+                    foreach (var d in SteamWorkshop.ModuleFolders(fs, itemFolder)) Check(d, "Steam Workshop item " + item, true, item);
+                }
             return result;
         }
     }

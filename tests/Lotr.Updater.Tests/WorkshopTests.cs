@@ -216,6 +216,12 @@ namespace Lotr.Updater.Tests
                 Assert.Contains(d, x => x.Path == deep && x.Where == "Steam Workshop item 42");
                 Assert.StartsWith("LotRMPCore is also subscribed on the Steam Workshop", d[0].Advice);
                 Assert.Contains("The game uses the copy installed by the updater", d[0].Advice);
+                Assert.Contains("we recommend unsubscribing", d[0].Advice);
+                // The button opens the item's page in Steam, built from the item number only.
+                Assert.Contains(d, x => x.WorkshopItem == "3772431545" && x.WorkshopPageUrl == "steam://url/CommunityFilePage/3772431545");
+                Assert.Contains(d, x => x.WorkshopItem == "42" && x.WorkshopPageUrl == "steam://url/CommunityFilePage/42");
+                Assert.Null(new DuplicateModule { IsWorkshop = true, WorkshopItem = "12&calc" }.WorkshopPageUrl);
+                Assert.Null(new DuplicateModule { IsWorkshop = false, WorkshopItem = "42" }.WorkshopPageUrl);
                 // Other stores have no Workshop.
                 game.Store = LotR.GameDetection.GameStore.Epic;
                 Assert.Empty(DuplicateModuleScanner.Scan(h.Fs, game, manifest));

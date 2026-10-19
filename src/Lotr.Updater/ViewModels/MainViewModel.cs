@@ -56,6 +56,9 @@ namespace Lotr.Updater.ViewModels
     {
         public string Text { get; set; }
         public string Severity { get; set; }
+        public string LinkUrl { get; set; }
+        public string LinkText { get; set; }
+        public bool HasLink => !string.IsNullOrEmpty(LinkUrl);
     }
 
     public sealed class MainViewModel : ObservableObject
@@ -105,6 +108,7 @@ namespace Lotr.Updater.ViewModels
             RefreshLogCommand = new RelayCommand(RefreshSupportLog);
             OpenLogsCommand = new RelayCommand(() => OpenFolder(_svc.Paths.LogDir));
             OpenBackupCommand = new RelayCommand(() => OpenFolder(_svc.Paths.BackupRoot));
+            OpenLinkCommand = new RelayCommand(p => OpenWorkshopPage(p as string));
             OpenModulesCommand = new RelayCommand(() => { if (_svc.Game != null) OpenFolder(_svc.Game.ModulesPath); });
             BrowseGameCommand = new RelayCommand(BrowseGame, () => !Busy && !IsDev);
             AcceptRollbackCommand = new RelayCommand(() =>
@@ -162,6 +166,7 @@ namespace Lotr.Updater.ViewModels
         public RelayCommand OpenModulesCommand { get; }
         public RelayCommand BrowseGameCommand { get; }
         public RelayCommand UninstallCommand { get; }
+        public RelayCommand OpenLinkCommand { get; }
         public RelayCommand AcceptRollbackCommand { get; }
         public RelayCommand RestartToUpdateCommand { get; }
         public RelayCommand RollbackUpdaterCommand { get; }
@@ -510,7 +515,7 @@ namespace Lotr.Updater.ViewModels
             PlanFacts.Add(new Fact("Release", p.Manifest.ReleaseId + " · " + (p.SignatureStatus ?? "")));
             PlanIssues.Clear();
             foreach (var i in p.Issues.OrderByDescending(x => x.Severity))
-                PlanIssues.Add(new IssueRow { Text = i.Text, Severity = i.Severity.ToString().ToLowerInvariant() });
+                PlanIssues.Add(new IssueRow { Text = i.Text, Severity = i.Severity.ToString().ToLowerInvariant(), LinkUrl = i.LinkUrl, LinkText = i.LinkText });
             PlanNote = p.HasChanges
                 ? "Nothing has been changed yet. Files are downloaded and checked first; your game folder is only touched at the very end, in a few seconds, and everything is put back if anything goes wrong."
                 : "Everything already matches. Nothing to do.";
@@ -639,7 +644,7 @@ namespace Lotr.Updater.ViewModels
                 foreach (var x in r.Extra.Take(200)) VerifyRows.Add(new IssueRow { Severity = "extra", Text = x + "  (not part of the release; Repair removes it, with a backup)" });
                 foreach (var d in r.Duplicates)
                     VerifyRows.Add(d.IsWorkshop
-                        ? new IssueRow { Severity = "info", Text = d.Advice } // Workshop subscription: harmless, the game uses Modules
+                        ? new IssueRow { Severity = "info", Text = d.Advice, LinkUrl = d.WorkshopPageUrl, LinkText = d.WorkshopPageUrl != null ? "Open the Workshop page" : null } // Workshop subscription: the game uses Modules
                         : new IssueRow { Severity = "duplicate", Text = d.Id + " is also in " + d.Path + " (" + d.Where + "). Tick only one copy in the launcher, or remove the other one." });
                 if (r.MarkOfTheWebCleared > 0) VerifyRows.Add(new IssueRow { Severity = "fixed", Text = $"Removed the \"downloaded from the internet\" mark from {Plural(r.MarkOfTheWebCleared, "file")} (Windows can refuse to load a mod DLL that carries it)." });
             }
@@ -830,6 +835,22 @@ namespace Lotr.Updater.ViewModels
             {
                 _svc.Log.Error("Could not open the launcher: " + ex.Message);
                 MessageBox.Show("Could not open the launcher (" + ex.Message + "). Start Bannerlord from your store as usual.", "LotR MP Event", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        /// <summary>Opens a Workshop item page in the Steam client (its Unsubscribe button), else in the browser. Only
+        /// steam://url/CommunityFilePage/&lt;digits&gt; is accepted: nothing else can be launched from a plan or verify row.</summary>
+        private void OpenWorkshopPage(string url)
+        {
+            const string prefix = "steam://url/CommunityFilePage/";
+            if (url == null || !url.StartsWith(prefix, StringComparison.Ordinal)) return;
+            var id = url.Substring(prefix.Length);
+            if (id.Length == 0 || !id.All(char.IsDigit)) return;
+            try { Process.Start(new ProcessStartInfo(prefix + id) { UseShellExecute = true })?.Dispose(); }
+            catch (Exception)
+            {
+                try { Process.Start(new ProcessStartInfo("https://steamcommunity.com/sharedfiles/filedetails/?id=" + id) { UseShellExecute = true })?.Dispose(); }
+                catch (Exception ex) { _svc.Log.Warn(ex.Message); }
             }
         }
 
