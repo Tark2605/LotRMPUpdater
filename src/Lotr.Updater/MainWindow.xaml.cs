@@ -97,9 +97,24 @@ namespace Lotr.Updater
         }
 
         /// <summary>Dev only: walks through every screen against the local fake release and saves a PNG of each.</summary>
+        // Dev tour only, LOTR_TOUR_FRAMES=1: a frame of the window every 200 ms in <tour>\frames (for the demo video),
+        // rendered off-screen like Shot(), so windows above the updater never end up in the video.
+        private DispatcherTimer _frameTimer;
+        private int _frame;
+        private bool Filming => _frameTimer != null;
+
+        private void StartFrames(string dir)
+        {
+            var frames = Path.Combine(dir, "frames");
+            Directory.CreateDirectory(frames);
+            _frameTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (s, e) => Save(Path.Combine(frames, (_frame++).ToString("D5") + ".png")), Dispatcher);
+            _frameTimer.Start();
+        }
+
         private async Task TourAsync(string dir)
         {
             Directory.CreateDirectory(dir);
+            if (Environment.GetEnvironmentVariable("LOTR_TOUR_FRAMES") == "1") StartFrames(dir);
             await Shot(dir, "01-home-update-available");
             _vm.ReviewCommand.Execute(null);
             await Shot(dir, "02-plan");
@@ -136,13 +151,19 @@ namespace Lotr.Updater
             await _vm.LoadScansAsync();
             _vm.Page = Page.About;
             await Shot(dir, "10-about");
+            _frameTimer?.Stop();
             Close();
         }
 
         private async Task Shot(string dir, string name)
         {
-            await Task.Delay(250);
+            await Task.Delay(Filming ? 3000 : 250); // filming: hold each screen long enough to be read
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            Save(Path.Combine(dir, name + ".png"));
+        }
+
+        private void Save(string path)
+        {
             UpdateLayout();
             var root = (FrameworkElement)Content;
             var dpi = VisualTreeHelper.GetDpi(this);
@@ -150,7 +171,7 @@ namespace Lotr.Updater
             bmp.Render(root);
             var enc = new PngBitmapEncoder();
             enc.Frames.Add(BitmapFrame.Create(bmp));
-            using (var f = File.Create(Path.Combine(dir, name + ".png"))) enc.Save(f);
+            using (var f = File.Create(path)) enc.Save(f);
         }
     }
 }
