@@ -24,6 +24,17 @@
 //   POST /api/hub/clan/members/<id>/kick auth  leader (anyone), officer (members only)
 //   POST /api/hub/clan/faction           auth  leader or officer: { faction }
 //   POST /api/hub/link                   auth  { code } from the bot's /hub link: ties the Discord account
+// Matches between clans (phase 3):
+//   GET  /api/hub/matches                      upcoming and recent matches (public: clans, date, mode, size, status)
+//   POST /api/hub/matches                auth  leader/officer: { opponent, at, mode, size, note? } -> challenge
+//   POST /api/hub/matches/<id>/accept    auth  leader/officer of the clan the proposal waits for
+//   POST /api/hub/matches/<id>/decline   auth  same
+//   POST /api/hub/matches/<id>/counter   auth  same: { at } -> new date, now waiting for the other clan
+//   POST /api/hub/matches/<id>/cancel    auth  leader/officer of either clan, before it is played
+//   POST /api/hub/matches/<id>/signup    auth  member of either clan: toggles his place in the lineup (cap: size)
+//   POST /api/hub/matches/<id>/report    auth  leader/officer, after the start: { winner: tag | "draw", score? }
+//   POST /api/hub/matches/<id>/confirm   auth  leader/officer of the other clan: the result stands
+//   POST /api/hub/matches/<id>/dispute   auth  same: the admins settle it
 // Internal routes (loopback, not proxied, header X-LotR-Hub-Secret):
 //   POST /internal/hub/session                 { steamId, name, server? } -> { token, expiresAt }   (game server)
 //   POST /internal/hub/link-code               { discordId, discordName? } -> { code, expiresAt }    (bot)
@@ -32,6 +43,8 @@
 //   POST /internal/hub/clans/<tag>/approve     { by }                                               (bot, admins)
 //   POST /internal/hub/clans/<tag>/reject      { by, reason? }                                      (bot, admins)
 //   GET  /internal/hub/players/by-discord/<id> -> player and clan                                   (bot)
+//   GET  /internal/hub/matches                 every match with lineups' Discord ids               (bot)
+//   POST /internal/hub/matches/<id>/settle     { winner, score?, by } -> admins settle a disputed result (bot)
 //   POST /internal/hub/players/forget          { steamId? | discordId?, by } -> erases a player (GDPR request, bot admins):
 //                                              sessions, link, requests, membership (a leader's clan passes to an
 //                                              officer, else the oldest member, else closes), name in histories
@@ -176,7 +189,35 @@ const MIGRATIONS = [
         by_player TEXT,
         at        INTEGER NOT NULL
     );`,
+    `CREATE TABLE matches (
+        id          INTEGER PRIMARY KEY,
+        clan_a      INTEGER NOT NULL REFERENCES clans(id),
+        clan_b      INTEGER NOT NULL REFERENCES clans(id),
+        waiting_for INTEGER REFERENCES clans(id),
+        status      TEXT NOT NULL CHECK (status IN ('proposed','accepted','declined','cancelled','reported','played','disputed')),
+        starts_at   INTEGER NOT NULL,
+        mode        TEXT NOT NULL,
+        size        INTEGER NOT NULL,
+        note        TEXT,
+        winner      INTEGER,
+        draw        INTEGER NOT NULL DEFAULT 0,
+        score       TEXT,
+        reported_by INTEGER,
+        created_by  TEXT NOT NULL,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX matches_start ON matches(starts_at);
+    CREATE TABLE lineups (
+        match_id  INTEGER NOT NULL REFERENCES matches(id),
+        clan_id   INTEGER NOT NULL REFERENCES clans(id),
+        steam_id  TEXT NOT NULL,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (match_id, steam_id)
+    );`,
 ];
+
+const MATCH_MODES = ['Battle', 'Siege', 'Skirmish', 'Captain', 'TeamDeathmatch', 'Duel'];
 
 class HubStore {
     constructor(file, { now = () => Date.now() } = {}) {
@@ -318,7 +359,15 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         }
         const pending = store.get(
             `SELECT r.id, c.tag, c.name, r.created_at FROM requests r JOIN clans c ON c.id = r.clan_id WHERE r.steam_id = ? AND r.status = 'pending'`, steamId);
+        const matches = m ? store.all(
+            `SELECT * FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status NOT IN ('declined','cancelled') AND (starts_at >= ? OR status IN ('reported','disputed')) ORDER BY starts_at LIMIT 20`,
+            m.id, m.id, now() - 7 * 86400000).map((row) => {
+            const v = matchView(row, true);
+            v.mine = { signedUp: [...v.a.lineup, ...v.b.lineup].some((x) => x.id === steamId), side: row.clan_a === m.id ? 'a' : 'b' };
+            return v;
+        }) : [];
         return {
+            matches,
             player: { id: player.steam_id, name: player.name, discordLinked: Boolean(player.discord_id), discordName: player.discord_name },
             clan,
             pendingRequest: pending ? { id: pending.id, tag: pending.tag, name: pending.name, createdAt: pending.created_at } : null,
@@ -563,6 +612,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         }
         store.run('DELETE FROM sessions WHERE steam_id = ?', steamId);
         store.run('DELETE FROM requests WHERE steam_id = ?', steamId);
+        store.run('DELETE FROM lineups WHERE steam_id = ?', steamId);
         // histories keep the facts (a member joined, left) without the person
         store.run(`UPDATE clan_history SET by_player = 'erased' WHERE by_player = ?`, steamId);
         store.run(`UPDATE clan_history SET detail = REPLACE(detail, ?, 'erased') WHERE detail LIKE ?`, steamId, `%${steamId}%`);
@@ -573,6 +623,168 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         log.info('hub.player.erased', { by });
         return { erased: true };
     });
+
+    // --- matches (phase 3) ---
+    const clanById = (id) => store.get('SELECT * FROM clans WHERE id = ?', id);
+
+    const matchView = (row, withIds) => {
+        const a = clanById(row.clan_a);
+        const b = clanById(row.clan_b);
+        const lineup = (clanId) => store.all(
+            `SELECT p.steam_id, p.name, p.discord_id FROM lineups l JOIN players p ON p.steam_id = l.steam_id WHERE l.match_id = ? AND l.clan_id = ? ORDER BY l.joined_at`, row.id, clanId)
+            .map((r) => (withIds ? { id: r.steam_id, name: r.name, discordId: r.discord_id } : { name: r.name }));
+        const tagOf = (id) => (id === row.clan_a ? a.tag : id === row.clan_b ? b.tag : null);
+        return {
+            id: row.id,
+            status: row.status,
+            startsAt: row.starts_at,
+            mode: row.mode,
+            size: row.size,
+            note: row.note,
+            a: { tag: a.tag, name: a.name, faction: factionOf(a.faction), lineup: lineup(a.id) },
+            b: { tag: b.tag, name: b.name, faction: factionOf(b.faction), lineup: lineup(b.id) },
+            waitingFor: tagOf(row.waiting_for),
+            result: row.status === 'reported' || row.status === 'played' || row.status === 'disputed'
+                ? { winner: row.draw ? 'draw' : tagOf(row.winner), score: row.score, reportedBy: tagOf(row.reported_by) } : null,
+        };
+    };
+
+    const matchForStaff = (steamId, id) => {
+        const row = store.get('SELECT * FROM matches WHERE id = ?', id);
+        if (!row) throw new HttpError(404, 'unknown_match', 'no match with this id');
+        const m = membership(steamId);
+        if (!m || (m.id !== row.clan_a && m.id !== row.clan_b)) throw new HttpError(403, 'forbidden', 'your clan is not in this match');
+        return { row, m, staff: m.role === 'leader' || m.role === 'officer' };
+    };
+
+    const parseStart = (at) => {
+        const t = typeof at === 'number' ? at : Date.parse(at);
+        if (!Number.isFinite(t)) throw new HttpError(400, 'bad_date', 'at: a date and time (ISO 8601 or Unix ms)');
+        if (t < now() + 15 * 60000) throw new HttpError(400, 'bad_date', 'the match must start at least 15 minutes from now');
+        if (t > now() + 120 * 86400000) throw new HttpError(400, 'bad_date', 'the match must start within 120 days');
+        return t;
+    };
+
+    const matchEvent = (type, row, extra = {}) => {
+        const a = clanById(row.clan_a);
+        const b = clanById(row.clan_b);
+        store.event(type, { match: row.id, a: a.tag, b: b.tag, startsAt: row.starts_at, mode: row.mode, size: row.size, ...extra });
+    };
+
+    const challenge = (steamId, body) => store.tx(() => {
+        const m = membership(steamId);
+        if (!m || (m.role !== 'leader' && m.role !== 'officer')) throw new HttpError(403, 'forbidden', 'only a leader or an officer challenges another clan');
+        if (m.status !== 'active') throw new HttpError(409, 'clan_not_active', 'your clan is not approved yet');
+        const opponent = clanByTag(body.opponent);
+        if (!opponent) throw new HttpError(404, 'unknown_clan', 'no active clan with this tag');
+        if (opponent.id === m.id) throw new HttpError(400, 'same_clan', 'a clan cannot challenge itself');
+        if (!MATCH_MODES.includes(body.mode)) throw new HttpError(400, 'bad_mode', `mode: ${MATCH_MODES.join(', ')}`);
+        const size = Number(body.size);
+        if (!Number.isInteger(size) || size < 1 || size > 100) throw new HttpError(400, 'bad_size', 'size: players per side, 1 to 100');
+        const at = parseStart(body.at);
+        const open = store.get(`SELECT COUNT(*) AS n FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status IN ('proposed','accepted')`, m.id, m.id).n;
+        if (open >= hubConfig.maxOpenMatchesPerClan) throw new HttpError(409, 'too_many_matches', 'your clan already has too many open matches');
+        const t = now();
+        const result = store.run(
+            `INSERT INTO matches (clan_a, clan_b, waiting_for, status, starts_at, mode, size, note, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?)`, m.id, opponent.id, opponent.id, at, body.mode, size, cleanText(body.note, 200), steamId, t, t);
+        const row = store.get('SELECT * FROM matches WHERE id = ?', Number(result.lastInsertRowid));
+        matchEvent('match.proposed', row);
+        return matchView(row, false);
+    });
+
+    const respond = (steamId, id, action, body) => store.tx(() => {
+        const { row, m, staff } = matchForStaff(steamId, id);
+        if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer answers');
+        if (row.status !== 'proposed' || row.waiting_for !== m.id) throw new HttpError(409, 'not_waiting_for_you', 'this proposal is not waiting for your clan');
+        const t = now();
+        if (action === 'accept') {
+            store.run(`UPDATE matches SET status = 'accepted', waiting_for = NULL, updated_at = ? WHERE id = ?`, t, row.id);
+        } else if (action === 'decline') {
+            store.run(`UPDATE matches SET status = 'declined', waiting_for = NULL, updated_at = ? WHERE id = ?`, t, row.id);
+        } else {
+            const at = parseStart(body.at);
+            const other = m.id === row.clan_a ? row.clan_b : row.clan_a;
+            store.run(`UPDATE matches SET starts_at = ?, waiting_for = ?, updated_at = ? WHERE id = ?`, at, other, t, row.id);
+        }
+        const updated = store.get('SELECT * FROM matches WHERE id = ?', row.id);
+        matchEvent(action === 'accept' ? 'match.accepted' : action === 'decline' ? 'match.declined' : 'match.countered', updated, { by: clanById(m.id).tag });
+        return matchView(updated, false);
+    });
+
+    const cancelMatch = (steamId, id) => store.tx(() => {
+        const { row, m, staff } = matchForStaff(steamId, id);
+        if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer cancels');
+        if (!['proposed', 'accepted'].includes(row.status)) throw new HttpError(409, 'not_open', 'this match can no longer be cancelled');
+        if (row.status === 'accepted' && row.starts_at <= now()) throw new HttpError(409, 'started', 'the match has started: report the result instead');
+        store.run(`UPDATE matches SET status = 'cancelled', waiting_for = NULL, updated_at = ? WHERE id = ?`, now(), row.id);
+        const updated = store.get('SELECT * FROM matches WHERE id = ?', row.id);
+        matchEvent('match.cancelled', updated, { by: clanById(m.id).tag });
+        return matchView(updated, false);
+    });
+
+    const signup = (steamId, id) => store.tx(() => {
+        const { row, m } = matchForStaff(steamId, id);
+        if (!['proposed', 'accepted'].includes(row.status) || row.starts_at <= now()) throw new HttpError(409, 'not_open', 'sign-ups are closed for this match');
+        const mine = store.get('SELECT 1 AS x FROM lineups WHERE match_id = ? AND steam_id = ?', row.id, steamId);
+        if (mine) {
+            store.run('DELETE FROM lineups WHERE match_id = ? AND steam_id = ?', row.id, steamId);
+            return { signedUp: false };
+        }
+        const count = store.get('SELECT COUNT(*) AS n FROM lineups WHERE match_id = ? AND clan_id = ?', row.id, m.id).n;
+        if (count >= row.size) throw new HttpError(409, 'lineup_full', 'your clan\'s lineup is full');
+        store.run('INSERT INTO lineups (match_id, clan_id, steam_id, joined_at) VALUES (?, ?, ?, ?)', row.id, m.id, steamId, now());
+        return { signedUp: true };
+    });
+
+    const resultArgs = (row, body) => {
+        if (body.winner === 'draw') return { winner: null, draw: 1 };
+        const a = clanById(row.clan_a);
+        const b = clanById(row.clan_b);
+        const w = typeof body.winner === 'string' ? body.winner.toUpperCase() : '';
+        if (w === a.tag_key) return { winner: a.id, draw: 0 };
+        if (w === b.tag_key) return { winner: b.id, draw: 0 };
+        throw new HttpError(400, 'bad_winner', `winner: ${a.tag}, ${b.tag} or draw`);
+    };
+
+    const report = (steamId, id, body) => store.tx(() => {
+        const { row, m, staff } = matchForStaff(steamId, id);
+        if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer reports the result');
+        if (row.status !== 'accepted' && row.status !== 'reported') throw new HttpError(409, 'not_reportable', 'only an accepted match gets a result');
+        if (row.starts_at > now()) throw new HttpError(409, 'not_started', 'the match has not started yet');
+        const r = resultArgs(row, body);
+        store.run(`UPDATE matches SET status = 'reported', winner = ?, draw = ?, score = ?, reported_by = ?, updated_at = ? WHERE id = ?`,
+            r.winner, r.draw, cleanText(body.score, 40), m.id, now(), row.id);
+        const updated = store.get('SELECT * FROM matches WHERE id = ?', row.id);
+        matchEvent('match.reported', updated, { by: clanById(m.id).tag });
+        return matchView(updated, false);
+    });
+
+    const confirmOrDispute = (steamId, id, confirm) => store.tx(() => {
+        const { row, m, staff } = matchForStaff(steamId, id);
+        if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer answers');
+        if (row.status !== 'reported' || row.reported_by === m.id) throw new HttpError(409, 'not_yours', 'the other clan confirms or disputes a reported result');
+        store.run(`UPDATE matches SET status = ?, updated_at = ? WHERE id = ?`, confirm ? 'played' : 'disputed', now(), row.id);
+        const updated = store.get('SELECT * FROM matches WHERE id = ?', row.id);
+        matchEvent(confirm ? 'match.played' : 'match.disputed', updated, { by: clanById(m.id).tag, ...matchView(updated, false).result });
+        return matchView(updated, false);
+    });
+
+    const settle = (id, body) => store.tx(() => {
+        const row = store.get('SELECT * FROM matches WHERE id = ?', id);
+        if (!row || !['reported', 'disputed', 'accepted'].includes(row.status)) throw new HttpError(404, 'unknown_match', 'no match waiting for a result with this id');
+        const r = resultArgs(row, body);
+        store.run(`UPDATE matches SET status = 'played', winner = ?, draw = ?, score = ?, updated_at = ? WHERE id = ?`, r.winner, r.draw, cleanText(body.score, 40), now(), row.id);
+        const updated = store.get('SELECT * FROM matches WHERE id = ?', row.id);
+        matchEvent('match.played', updated, { by: cleanText(body.by, 64) || 'admin', settled: true, ...matchView(updated, false).result });
+        return matchView(updated, false);
+    });
+
+    const listMatches = (withIds) => {
+        const since = now() - 14 * 86400000;
+        return store.all(`SELECT * FROM matches WHERE status NOT IN ('declined','cancelled') AND (starts_at >= ? OR status IN ('reported','disputed')) ORDER BY starts_at LIMIT 100`, since)
+            .map((row) => matchView(row, withIds));
+    };
 
     const allClansInternal = () => store.all(`SELECT * FROM clans WHERE status IN ('pending','active') ORDER BY tag_key`).map((c) => ({
         ...clanSummary(c),
@@ -598,6 +810,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
             return sendJson(res, 200, { clan: { ...clanSummary(clan), roster: members(clan.id, false) } }), true;
         }
         if (route === 'GET /api/hub/me') return sendJson(res, 200, me(authPlayer(req))), true;
+        if (route === 'GET /api/hub/matches') return sendJson(res, 200, { matches: listMatches(false) }), true;
 
         if (req.method === 'POST' && p.startsWith('/api/hub/')) {
             const steamId = authPlayer(req);
@@ -616,6 +829,17 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
             if ((m = /^\/api\/hub\/clan\/members\/(\d{17})\/kick$/.exec(p))) return sendJson(res, 200, kick(steamId, m[1])), true;
             if (p === '/api/hub/clan/faction') return sendJson(res, 200, setFaction(steamId, body.faction)), true;
             if (p === '/api/hub/link') return sendJson(res, 200, link(steamId, body.code)), true;
+            if (p === '/api/hub/matches') return sendJson(res, 201, challenge(steamId, body)), true;
+            if ((m = /^\/api\/hub\/matches\/(\d+)\/(accept|decline|counter|cancel|signup|report|confirm|dispute)$/.exec(p))) {
+                const id = Number(m[1]);
+                switch (m[2]) {
+                    case 'accept': case 'decline': case 'counter': return sendJson(res, 200, respond(steamId, id, m[2], body)), true;
+                    case 'cancel': return sendJson(res, 200, cancelMatch(steamId, id)), true;
+                    case 'signup': return sendJson(res, 200, signup(steamId, id)), true;
+                    case 'report': return sendJson(res, 200, report(steamId, id, body)), true;
+                    default: return sendJson(res, 200, confirmOrDispute(steamId, id, m[2] === 'confirm')), true;
+                }
+            }
             throw new HttpError(404, 'not_found');
         }
 
@@ -631,6 +855,8 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
                 return sendJson(res, 200, { events: rows, last: rows.length ? rows[rows.length - 1].id : after }), true;
             }
             if (route === 'GET /internal/hub/clans') return sendJson(res, 200, { clans: allClansInternal() }), true;
+            if (route === 'GET /internal/hub/matches') return sendJson(res, 200, { matches: listMatches(true) }), true;
+            if (req.method === 'POST' && (m = /^\/internal\/hub\/matches\/(\d+)\/settle$/.exec(p))) return sendJson(res, 200, settle(Number(m[1]), await readJson(req, 4096))), true;
             if (route === 'POST /internal/hub/players/forget') return sendJson(res, 200, forgetPlayer(await readJson(req, 4096))), true;
             if (route === 'POST /internal/hub/clans/import') return sendJson(res, 201, importClan(await readJson(req, 4096))), true;
             if (req.method === 'POST' && (m = /^\/internal\/hub\/clans\/([^/]+)\/(approve|reject)$/.exec(p))) {

@@ -302,3 +302,87 @@ test('erasure (GDPR): the player disappears, his clan passes to an officer, hist
     await s.login(ALICE, 'Alice');
     assert.equal((await s.as(ALICE).get('/api/hub/me')).json.clan, null);
 });
+
+/** Two active clans: [FELL] led by Alice (Bob member), [MORG] led by Carol (Dave officer). */
+async function withTwoClans(s) {
+    await withClan(s);
+    await s.login(CAROL, 'Carol');
+    await s.login(DAVE, 'Dave');
+    await s.as(CAROL).post('/api/hub/clans', { tag: 'MORG', name: 'Host of Morgul', faction: 'mordor' });
+    await s.internal('POST', '/internal/hub/clans/MORG/approve', { by: 'admin' });
+    const d = await s.as(DAVE).post('/api/hub/clans/MORG/join');
+    await s.as(CAROL).post(`/api/hub/requests/${d.json.id}/accept`);
+    await s.as(CAROL).post(`/api/hub/clan/members/${DAVE}/role`, { role: 'officer' });
+}
+
+test('matches: challenge, counter, accept, sign-ups capped, result reported and confirmed, events for the bot', async (t) => {
+    const s = await startHub();
+    t.after(s.stop);
+    await withTwoClans(s);
+    const inTwoDays = s.clock.t + 2 * 86400000;
+    // a member cannot challenge; bad inputs refused
+    assert.equal((await s.as(BOB).post('/api/hub/matches', { opponent: 'MORG', at: inTwoDays, mode: 'Battle', size: 2 })).status, 403);
+    assert.equal((await s.as(ALICE).post('/api/hub/matches', { opponent: 'FELL', at: inTwoDays, mode: 'Battle', size: 2 })).json.error, 'same_clan');
+    assert.equal((await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at: inTwoDays, mode: 'Chess', size: 2 })).json.error, 'bad_mode');
+    assert.equal((await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at: s.clock.t + 60000, mode: 'Battle', size: 2 })).json.error, 'bad_date');
+    const created = await s.as(ALICE).post('/api/hub/matches', { opponent: 'morg', at: new Date(inTwoDays).toISOString(), mode: 'Battle', size: 2, note: 'best of 3' });
+    assert.equal(created.status, 201);
+    const id = created.json.id;
+    assert.equal(created.json.waitingFor, 'MORG');
+    // FELL cannot answer its own proposal; Dave (MORG officer) counters with another date
+    assert.equal((await s.as(ALICE).post(`/api/hub/matches/${id}/accept`)).json.error, 'not_waiting_for_you');
+    const countered = await s.as(DAVE).post(`/api/hub/matches/${id}/counter`, { at: inTwoDays + 3600000 });
+    assert.equal(countered.json.waitingFor, 'FELL');
+    assert.equal((await s.as(BOB).post(`/api/hub/matches/${id}/accept`)).status, 403);
+    assert.equal((await s.as(ALICE).post(`/api/hub/matches/${id}/accept`)).json.status, 'accepted');
+    // sign-ups: two per side, toggle off and on
+    assert.equal((await s.as(ALICE).post(`/api/hub/matches/${id}/signup`)).json.signedUp, true);
+    assert.equal((await s.as(BOB).post(`/api/hub/matches/${id}/signup`)).json.signedUp, true);
+    await s.login('76561198000000005', 'Eve');
+    const eve = await s.as('76561198000000005').post('/api/hub/clans/FELL/join');
+    await s.as(ALICE).post(`/api/hub/requests/${eve.json.id}/accept`);
+    assert.equal((await s.as('76561198000000005').post(`/api/hub/matches/${id}/signup`)).json.error, 'lineup_full');
+    assert.equal((await s.as(BOB).post(`/api/hub/matches/${id}/signup`)).json.signedUp, false);
+    assert.equal((await s.as('76561198000000005').post(`/api/hub/matches/${id}/signup`)).json.signedUp, true);
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${id}/signup`)).json.signedUp, true);
+    const me = (await s.as(ALICE).get('/api/hub/me')).json;
+    assert.equal(me.matches.length, 1);
+    assert.equal(me.matches[0].mine.signedUp, true);
+    assert.deepEqual(me.matches[0].a.lineup.map((x) => x.name), ['Alice', 'Eve']);
+    // no result before the start; after it, MORG reports, FELL confirms
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${id}/report`, { winner: 'MORG' })).json.error, 'not_started');
+    s.clock.t = inTwoDays + 2 * 3600000;
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${id}/report`, { winner: 'GOND' })).json.error, 'bad_winner');
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${id}/report`, { winner: 'MORG', score: '2-1' })).json.status, 'reported');
+    assert.equal((await s.as(DAVE).post(`/api/hub/matches/${id}/confirm`)).json.error, 'not_yours');
+    const played = await s.as(ALICE).post(`/api/hub/matches/${id}/confirm`);
+    assert.equal(played.json.status, 'played');
+    assert.deepEqual(played.json.result, { winner: 'MORG', score: '2-1', reportedBy: 'MORG' });
+    const types = (await s.internal('GET', '/internal/hub/events?after=0')).json.events.map((e) => e.type).filter((x) => x.startsWith('match.'));
+    assert.deepEqual(types, ['match.proposed', 'match.countered', 'match.accepted', 'match.reported', 'match.played']);
+    const pub = (await s.call('GET', '/api/hub/matches')).json.matches;
+    assert.equal(pub.length, 1);
+    assert.deepEqual(Object.keys(pub[0].a.lineup[0]), ['name']);
+});
+
+test('matches: decline, cancel before the start only, disputed result settled by the admins, open-match cap', async (t) => {
+    const s = await startHub({ maxOpenMatchesPerClan: 2 });
+    t.after(s.stop);
+    await withTwoClans(s);
+    const at = s.clock.t + 86400000;
+    const m1 = (await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at, mode: 'Siege', size: 5 })).json.id;
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${m1}/decline`)).json.status, 'declined');
+    const m2 = (await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at, mode: 'Battle', size: 5 })).json.id;
+    const m3 = (await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at: at + 3600000, mode: 'Battle', size: 5 })).json.id;
+    assert.equal((await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at, mode: 'Battle', size: 5 })).json.error, 'too_many_matches');
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${m3}/cancel`)).json.status, 'cancelled');
+    await s.as(CAROL).post(`/api/hub/matches/${m2}/accept`);
+    s.clock.t = at + 600000;
+    assert.equal((await s.as(ALICE).post(`/api/hub/matches/${m2}/cancel`)).json.error, 'started');
+    await s.as(ALICE).post(`/api/hub/matches/${m2}/report`, { winner: 'FELL' });
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${m2}/dispute`)).json.status, 'disputed');
+    const settled = await s.internal('POST', `/internal/hub/matches/${m2}/settle`, { winner: 'draw', score: '1-1', by: 'Admin' });
+    assert.equal(settled.status, 200);
+    assert.deepEqual(settled.json.result.winner, 'draw');
+    assert.equal(settled.json.status, 'played');
+});

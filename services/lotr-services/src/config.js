@@ -25,6 +25,8 @@ const DEFAULTS = Object.freeze({
         linkCodeTtlMinutes: 15,
         requestTtlDays: 14,
         writesPerMinute: 30,
+        // Matches (phase 3): open challenges and accepted matches a clan may have at once.
+        maxOpenMatchesPerClan: 6,
         // Dev bench only: loopback requests may name a player in X-Hub-Dev-Player. Never on the server.
         devIdentity: false,
         // Factions a clan may choose; empty = the twelve kingdoms of the event (src/hub.js DEFAULT_FACTIONS).
@@ -186,6 +188,7 @@ function validate(c) {
     const h = c.hub;
     if (!(h.tokenTtlDays > 0) || !(h.linkCodeTtlMinutes > 0) || !(h.requestTtlDays > 0)) problems.push('hub.tokenTtlDays, hub.linkCodeTtlMinutes and hub.requestTtlDays must be > 0');
     if (!(h.writesPerMinute >= 1)) problems.push('hub.writesPerMinute must be >= 1');
+    if (!Number.isInteger(h.maxOpenMatchesPerClan) || h.maxOpenMatchesPerClan < 1) problems.push('hub.maxOpenMatchesPerClan must be an integer >= 1');
     if (!Array.isArray(h.factions) || h.factions.some((f) => !f || typeof f.id !== 'string' || typeof f.name !== 'string')) problems.push('hub.factions must be a list of { id, name, side }');
     if (problems.length) throw new Error(`Invalid configuration: ${problems.join('; ')}`);
 }
