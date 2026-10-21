@@ -16,6 +16,20 @@ const DEFAULTS = Object.freeze({
     allowNonLoopback: false,
     // Client IP: the right-most X-Forwarded-For entry, trusted only when the TCP peer is loopback (Caddy).
     trustForwardedFor: true,
+    // Community hub API (src/hub.js). Off unless enabled: the service keeps its queue/support role without it.
+    hub: {
+        enabled: false,
+        dbFile: null,
+        secretFile: null,
+        tokenTtlDays: 60,
+        linkCodeTtlMinutes: 15,
+        requestTtlDays: 14,
+        writesPerMinute: 30,
+        // Dev bench only: loopback requests may name a player in X-Hub-Dev-Player. Never on the server.
+        devIdentity: false,
+        // Factions a clan may choose; empty = the twelve kingdoms of the event (src/hub.js DEFAULT_FACTIONS).
+        factions: [],
+    },
     log: {
         level: 'info',
         maxFileBytes: 10 * 1024 * 1024,
@@ -131,6 +145,11 @@ function finalize(config, file, baseDir) {
             secretFile: path.resolve(config.support.secretFile || path.join(dataDir, 'secrets', 'support-service.secret')),
         },
     };
+    result.hub = {
+        ...config.hub,
+        dbFile: config.hub.dbFile === ':memory:' ? ':memory:' : path.resolve(config.hub.dbFile || path.join(dataDir, 'hub', 'hub.sqlite')),
+        secretFile: path.resolve(config.hub.secretFile || path.join(dataDir, 'secrets', 'hub-internal.secret')),
+    };
     const suDir = path.resolve(config.siteUpdate.dir || path.join(dataDir, 'site-update'));
     result.siteUpdate = {
         ...config.siteUpdate,
@@ -164,6 +183,10 @@ function validate(c) {
     if (!(u.perIpPerHour >= 1)) problems.push('siteUpdate.perIpPerHour must be >= 1');
     if (!(u.maxAgeDays > 0) || !(u.maxFutureMinutes >= 0)) problems.push('siteUpdate.maxAgeDays must be > 0 and maxFutureMinutes >= 0');
     if (!(u.minFreeBytes >= 0)) problems.push('siteUpdate.minFreeBytes must be >= 0');
+    const h = c.hub;
+    if (!(h.tokenTtlDays > 0) || !(h.linkCodeTtlMinutes > 0) || !(h.requestTtlDays > 0)) problems.push('hub.tokenTtlDays, hub.linkCodeTtlMinutes and hub.requestTtlDays must be > 0');
+    if (!(h.writesPerMinute >= 1)) problems.push('hub.writesPerMinute must be >= 1');
+    if (!Array.isArray(h.factions) || h.factions.some((f) => !f || typeof f.id !== 'string' || typeof f.name !== 'string')) problems.push('hub.factions must be a list of { id, name, side }');
     if (problems.length) throw new Error(`Invalid configuration: ${problems.join('; ')}`);
 }
 

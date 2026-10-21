@@ -22,6 +22,7 @@ const { SupportStore, RateLimiter, maskUserPaths, summariseLog, validateSubmissi
 const { clientIp, isLoopback, isProxied, sendJson, readJson, HttpError, safeEqual } = require('./http-util');
 const { silentLogger } = require('./log');
 const { createSiteUpdate } = require('./site-update');
+const { createHub } = require('./hub');
 
 const VERSION = require('../package.json').version;
 const SECRET_HEADER = 'x-lotr-secret';
@@ -48,10 +49,11 @@ function writeJsonAtomic(file, value) {
     fs.renameSync(tmp, file);
 }
 
-function createServices(config, { now = () => Date.now(), logger = silentLogger, secret = null, env = process.env } = {}) {
+function createServices(config, { now = () => Date.now(), logger = silentLogger, secret = null, hubSecret = null, env = process.env } = {}) {
     const log = logger;
     const startedAt = now();
     const supportSecret = secret ?? loadSupportSecret(config, env).secret;
+    const hub = config.hub?.enabled ? createHub(config, { now, logger: log, env, secret: hubSecret }) : null;
 
     // --- queue + crash-safe state -------------------------------------------------------------------------
     let persistTimer = null;
@@ -280,6 +282,8 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
                 });
             }
 
+            if (hub && await hub.handle(req, res, route, url)) return undefined;
+
             throw new HttpError(404, 'not_found');
         } catch (error) {
             if (error instanceof HttpError) {
@@ -298,9 +302,10 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
         store.purge();
         byIp.prune();
         byInstall.prune();
+        if (hub) hub.sweep();
     }
 
-    return { handle, queue, store, sweep, persistNow, advisory, coreObjects };
+    return { handle, queue, store, sweep, persistNow, advisory, coreObjects, hub };
 }
 
 // Creates the HTTP server and the periodic jobs. start() resolves with the bound address.
@@ -345,6 +350,7 @@ function createApp(config, deps = {}) {
             if (timer) clearInterval(timer);
             services.persistNow();
             if (siteUpdate) await siteUpdate.stop();
+            if (services.hub) services.hub.close();
             return new Promise((resolve) => {
                 server.close(() => resolve());
                 server.closeAllConnections?.();
