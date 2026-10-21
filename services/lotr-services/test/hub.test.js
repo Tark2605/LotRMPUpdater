@@ -278,3 +278,27 @@ test('import: an existing Discord clan comes in once its leader has linked his a
     assert.equal(events.at(-1).type, 'clan.approved');
     assert.equal(events.at(-1).imported, true);
 });
+
+test('erasure (GDPR): the player disappears, his clan passes to an officer, histories keep no trace of him', async (t) => {
+    const s = await startHub();
+    t.after(s.stop);
+    await withClan(s);
+    await s.login(CAROL, 'Carol');
+    const carol = await s.as(CAROL).post('/api/hub/clans/FELL/join');
+    await s.as(ALICE).post(`/api/hub/requests/${carol.json.id}/accept`);
+    await s.as(ALICE).post(`/api/hub/clan/members/${CAROL}/role`, { role: 'officer' });
+    assert.equal((await s.internal('POST', '/internal/hub/players/forget', { steamId: '76561198999999999' })).status, 404);
+    assert.equal((await s.internal('POST', '/internal/hub/players/forget', { steamId: ALICE, by: 'Admin' })).status, 200);
+    // her token no longer works, the officer leads now
+    assert.equal((await s.as(ALICE).get('/api/hub/me')).status, 401);
+    const clan = (await s.call('GET', '/api/hub/clans/FELL')).json.clan;
+    assert.equal(clan.leader, 'Carol');
+    assert.equal(clan.members, 2);
+    const db = s.app.hub.store;
+    assert.equal(db.get('SELECT COUNT(*) AS n FROM players WHERE steam_id = ?', ALICE).n, 0);
+    assert.equal(db.get('SELECT COUNT(*) AS n FROM clan_history WHERE by_player = ? OR detail LIKE ?', ALICE, `%${ALICE}%`).n, 0);
+    assert.equal(db.get('SELECT COUNT(*) AS n FROM clans WHERE created_by = ?', ALICE).n, 0);
+    // she can come back later as a new player
+    await s.login(ALICE, 'Alice');
+    assert.equal((await s.as(ALICE).get('/api/hub/me')).json.clan, null);
+});

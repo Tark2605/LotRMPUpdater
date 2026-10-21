@@ -32,6 +32,9 @@
 //   POST /internal/hub/clans/<tag>/approve     { by }                                               (bot, admins)
 //   POST /internal/hub/clans/<tag>/reject      { by, reason? }                                      (bot, admins)
 //   GET  /internal/hub/players/by-discord/<id> -> player and clan                                   (bot)
+//   POST /internal/hub/players/forget          { steamId? | discordId?, by } -> erases a player (GDPR request, bot admins):
+//                                              sessions, link, requests, membership (a leader's clan passes to an
+//                                              officer, else the oldest member, else closes), name in histories
 //   POST /internal/hub/clans/import            { tag, name, faction, leaderDiscordId, by } -> active clan (bot, admins:
 //                                              brings an existing Discord clan in once its leader has linked his account)
 const fs = require('node:fs');
@@ -536,6 +539,41 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         return { tag, status: 'active' };
     });
 
+    const forgetPlayer = (body) => store.tx(() => {
+        let steamId = typeof body.steamId === 'string' && STEAM_ID.test(body.steamId) ? body.steamId : null;
+        if (!steamId && typeof body.discordId === 'string') steamId = (store.get('SELECT steam_id FROM players WHERE discord_id = ?', body.discordId) || {}).steam_id || null;
+        if (!steamId || !store.get('SELECT steam_id FROM players WHERE steam_id = ?', steamId)) throw new HttpError(404, 'unknown_player', 'no hub player with this Steam or Discord id');
+        const by = cleanText(body.by, 64) || 'admin';
+        const t = now();
+        const m = membership(steamId);
+        if (m) {
+            const clan = store.get('SELECT * FROM clans WHERE id = ?', m.id);
+            store.run('DELETE FROM members WHERE steam_id = ?', steamId);
+            store.event('member.left', { tag: clan.tag, player: steamId, discordId: discordOf(steamId) });
+            if (m.role === 'leader') {
+                const heir = store.get(`SELECT steam_id FROM members WHERE clan_id = ? ORDER BY CASE role WHEN 'officer' THEN 0 ELSE 1 END, joined_at LIMIT 1`, m.id);
+                if (heir) {
+                    store.run(`UPDATE members SET role = 'leader' WHERE steam_id = ?`, heir.steam_id);
+                    store.history(m.id, 'leader', heir.steam_id, 'erasure');
+                    store.event('role.changed', { tag: clan.tag, player: heir.steam_id, discordId: discordOf(heir.steam_id), role: 'leader', by: 'erasure' });
+                } else if (clan.status === 'active' || clan.status === 'pending') {
+                    closeClan(clan, 'erasure', 'last member erased');
+                }
+            }
+        }
+        store.run('DELETE FROM sessions WHERE steam_id = ?', steamId);
+        store.run('DELETE FROM requests WHERE steam_id = ?', steamId);
+        // histories keep the facts (a member joined, left) without the person
+        store.run(`UPDATE clan_history SET by_player = 'erased' WHERE by_player = ?`, steamId);
+        store.run(`UPDATE clan_history SET detail = REPLACE(detail, ?, 'erased') WHERE detail LIKE ?`, steamId, `%${steamId}%`);
+        store.run(`UPDATE clans SET created_by = 'erased' WHERE created_by = ?`, steamId);
+        store.run(`UPDATE requests SET decided_by = 'erased' WHERE decided_by = ?`, steamId);
+        store.run('DELETE FROM players WHERE steam_id = ?', steamId);
+        store.event('player.erased', { by, at: t });
+        log.info('hub.player.erased', { by });
+        return { erased: true };
+    });
+
     const allClansInternal = () => store.all(`SELECT * FROM clans WHERE status IN ('pending','active') ORDER BY tag_key`).map((c) => ({
         ...clanSummary(c),
         roster: store.all(
@@ -593,6 +631,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
                 return sendJson(res, 200, { events: rows, last: rows.length ? rows[rows.length - 1].id : after }), true;
             }
             if (route === 'GET /internal/hub/clans') return sendJson(res, 200, { clans: allClansInternal() }), true;
+            if (route === 'POST /internal/hub/players/forget') return sendJson(res, 200, forgetPlayer(await readJson(req, 4096))), true;
             if (route === 'POST /internal/hub/clans/import') return sendJson(res, 201, importClan(await readJson(req, 4096))), true;
             if (req.method === 'POST' && (m = /^\/internal\/hub\/clans\/([^/]+)\/(approve|reject)$/.exec(p))) {
                 return sendJson(res, 200, decideClan(decodeURIComponent(m[1]), m[2] === 'approve', await readJson(req, 4096))), true;
