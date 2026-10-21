@@ -288,6 +288,9 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
          WHERE m.clan_id = ? ORDER BY CASE m.role WHEN 'leader' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END, p.name COLLATE NOCASE`, clanId)
         .map((r) => (withIds ? { id: r.steam_id, name: r.name, role: r.role, joinedAt: r.joined_at } : { name: r.name, role: r.role }));
 
+    /** Discord id of a player (null when not linked): carried in the events so the bot can act on the right member. */
+    const discordOf = (steamId) => (store.get('SELECT discord_id FROM players WHERE steam_id = ?', steamId) || {}).discord_id || null;
+
     const factionOf = (id) => factions.find((f) => f.id === id) || { id, name: id, side: null };
 
     const clanSummary = (c) => {
@@ -371,7 +374,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
             }
             store.run(`INSERT INTO members (clan_id, steam_id, role, joined_at) VALUES (?, ?, 'member', ?)`, r.clan_id, r.steam_id, t);
             store.history(r.clan_id, 'joined', null, r.steam_id);
-            store.event('member.joined', { tag: clan.tag, player: r.steam_id, by: steamId });
+            store.event('member.joined', { tag: clan.tag, player: r.steam_id, discordId: discordOf(r.steam_id), by: steamId });
         } else {
             store.event('request.rejected', { tag: clan.tag, player: r.steam_id, by: steamId });
         }
@@ -401,7 +404,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         if (m.role === 'leader' && count > 1) throw new HttpError(409, 'leader_must_hand_over', 'hand the leadership to another member before leaving');
         store.run('DELETE FROM members WHERE steam_id = ?', steamId);
         store.history(m.id, 'left', null, steamId);
-        store.event('member.left', { tag: clan.tag, player: steamId });
+        store.event('member.left', { tag: clan.tag, player: steamId, discordId: discordOf(steamId) });
         if (count === 1) closeClan(clan, steamId, 'last member left');
         return { left: clan.tag };
     });
@@ -417,12 +420,12 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
             store.run(`UPDATE members SET role = 'officer' WHERE steam_id = ?`, steamId);
             store.run(`UPDATE members SET role = 'leader' WHERE steam_id = ?`, targetId);
             store.history(m.id, 'leader', targetId, steamId);
-            store.event('role.changed', { tag: clan.tag, player: targetId, role: 'leader', by: steamId });
-            store.event('role.changed', { tag: clan.tag, player: steamId, role: 'officer', by: steamId });
+            store.event('role.changed', { tag: clan.tag, player: targetId, discordId: discordOf(targetId), role: 'leader', by: steamId });
+            store.event('role.changed', { tag: clan.tag, player: steamId, discordId: discordOf(steamId), role: 'officer', by: steamId });
         } else {
             store.run('UPDATE members SET role = ? WHERE steam_id = ?', role, targetId);
             store.history(m.id, 'role', `${targetId} ${role}`, steamId);
-            store.event('role.changed', { tag: clan.tag, player: targetId, role, by: steamId });
+            store.event('role.changed', { tag: clan.tag, player: targetId, discordId: discordOf(targetId), role, by: steamId });
         }
         return { player: targetId, role };
     });
@@ -436,7 +439,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const clan = store.get('SELECT * FROM clans WHERE id = ?', m.id);
         store.run('DELETE FROM members WHERE steam_id = ?', targetId);
         store.history(m.id, 'kicked', targetId, steamId);
-        store.event('member.kicked', { tag: clan.tag, player: targetId, by: steamId });
+        store.event('member.kicked', { tag: clan.tag, player: targetId, discordId: discordOf(targetId), by: steamId });
         return { kicked: targetId };
     });
 
@@ -460,7 +463,8 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         store.run('DELETE FROM link_codes WHERE code_hash = ?', row.code_hash);
         store.run('UPDATE players SET discord_id = NULL, discord_name = NULL WHERE discord_id = ?', row.discord_id);
         store.run('UPDATE players SET discord_id = ?, discord_name = ? WHERE steam_id = ?', row.discord_id, row.discord_name, steamId);
-        store.event('link.done', { player: steamId, discordId: row.discord_id });
+        const linkedClan = membership(steamId);
+        store.event('link.done', { player: steamId, discordId: row.discord_id, tag: linkedClan ? linkedClan.tag : null });
         return { discordLinked: true, discordName: row.discord_name };
     });
 
