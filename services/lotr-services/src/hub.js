@@ -32,6 +32,8 @@
 //   POST /internal/hub/clans/<tag>/approve     { by }                                               (bot, admins)
 //   POST /internal/hub/clans/<tag>/reject      { by, reason? }                                      (bot, admins)
 //   GET  /internal/hub/players/by-discord/<id> -> player and clan                                   (bot)
+//   POST /internal/hub/clans/import            { tag, name, faction, leaderDiscordId, by } -> active clan (bot, admins:
+//                                              brings an existing Discord clan in once its leader has linked his account)
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -508,6 +510,28 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         return { tag: clan.tag, status: approve ? 'active' : 'rejected' };
     });
 
+    const importClan = (body) => store.tx(() => {
+        const tag = typeof body.tag === 'string' ? body.tag.trim() : '';
+        if (!TAG.test(tag)) throw new HttpError(400, 'bad_tag', 'tag: 2 to 6 letters or digits');
+        const name = cleanText(body.name, 32) || tag;
+        if (!factionIds.has(body.faction)) throw new HttpError(400, 'bad_faction', 'unknown faction');
+        const leader = typeof body.leaderDiscordId === 'string' ? store.get('SELECT steam_id FROM players WHERE discord_id = ?', body.leaderDiscordId) : null;
+        if (!leader) throw new HttpError(404, 'leader_not_linked', 'the leader has not linked his Discord account in the hub yet (/hub link)');
+        if (membership(leader.steam_id)) throw new HttpError(409, 'already_in_clan', 'the leader is already in a hub clan');
+        if (store.get(`SELECT id FROM clans WHERE tag_key = ? AND status IN ('pending','active')`, tag.toUpperCase())) throw new HttpError(409, 'tag_taken', 'this tag is already used in the hub');
+        const by = cleanText(body.by, 64) || 'admin';
+        const t = now();
+        const result = store.run(
+            `INSERT INTO clans (tag, tag_key, name, faction, status, created_by, created_at, decided_by, decided_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+            tag, tag.toUpperCase(), name, body.faction, leader.steam_id, t, by, t);
+        const clanId = Number(result.lastInsertRowid);
+        store.run(`INSERT INTO members (clan_id, steam_id, role, joined_at) VALUES (?, ?, 'leader', ?)`, clanId, leader.steam_id, t);
+        store.run(`UPDATE requests SET status = 'cancelled', decided_at = ? WHERE steam_id = ? AND status = 'pending'`, t, leader.steam_id);
+        store.history(clanId, 'imported', `from Discord by ${by}`, leader.steam_id);
+        store.event('clan.approved', { tag, name, faction: body.faction, by, imported: true });
+        return { tag, status: 'active' };
+    });
+
     const allClansInternal = () => store.all(`SELECT * FROM clans WHERE status IN ('pending','active') ORDER BY tag_key`).map((c) => ({
         ...clanSummary(c),
         roster: store.all(
@@ -565,6 +589,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
                 return sendJson(res, 200, { events: rows, last: rows.length ? rows[rows.length - 1].id : after }), true;
             }
             if (route === 'GET /internal/hub/clans') return sendJson(res, 200, { clans: allClansInternal() }), true;
+            if (route === 'POST /internal/hub/clans/import') return sendJson(res, 201, importClan(await readJson(req, 4096))), true;
             if (req.method === 'POST' && (m = /^\/internal\/hub\/clans\/([^/]+)\/(approve|reject)$/.exec(p))) {
                 return sendJson(res, 200, decideClan(decodeURIComponent(m[1]), m[2] === 'approve', await readJson(req, 4096))), true;
             }

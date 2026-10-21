@@ -258,3 +258,23 @@ test('cleanText strips control and bidi characters, collapses spaces, caps lengt
     assert.equal(cleanText('   ', 5), null);
     assert.equal(cleanText(42, 5), null);
 });
+
+test('import: an existing Discord clan comes in once its leader has linked his account', async (t) => {
+    const s = await startHub();
+    t.after(s.stop);
+    await s.login(ALICE, 'Alice');
+    const body = { tag: 'OLD', name: 'Old guard', faction: 'gondor', leaderDiscordId: '423456789012345678', by: 'Admin' };
+    assert.equal((await s.internal('POST', '/internal/hub/clans/import', body)).json.error, 'leader_not_linked');
+    const code = (await s.internal('POST', '/internal/hub/link-code', { discordId: '423456789012345678' })).json;
+    await s.as(ALICE).post('/api/hub/link', { code: code.code });
+    const imported = await s.internal('POST', '/internal/hub/clans/import', body);
+    assert.equal(imported.status, 201);
+    assert.deepEqual(imported.json, { tag: 'OLD', status: 'active' });
+    const me = (await s.as(ALICE).get('/api/hub/me')).json;
+    assert.equal(me.clan.tag, 'OLD');
+    assert.equal(me.clan.role, 'leader');
+    assert.equal((await s.internal('POST', '/internal/hub/clans/import', body)).json.error, 'already_in_clan');
+    const events = (await s.internal('GET', '/internal/hub/events?after=0')).json.events;
+    assert.equal(events.at(-1).type, 'clan.approved');
+    assert.equal(events.at(-1).imported, true);
+});
