@@ -386,3 +386,43 @@ test('matches: decline, cancel before the start only, disputed result settled by
     assert.deepEqual(settled.json.result.winner, 'draw');
     assert.equal(settled.json.status, 'played');
 });
+
+test('review fixes: own-side ids only, no re-report over the other clan, stale proposals, lineups follow membership, erasure scrubs events', async (t) => {
+    const s = await startHub();
+    t.after(s.stop);
+    await withTwoClans(s);
+    const at = s.clock.t + 86400000;
+    const id = (await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at, mode: 'Battle', size: 5 })).json.id;
+    await s.as(CAROL).post(`/api/hub/matches/${id}/accept`);
+    await s.as(BOB).post(`/api/hub/matches/${id}/signup`);
+    await s.as(DAVE).post(`/api/hub/matches/${id}/signup`);
+    const view = (await s.as(ALICE).get('/api/hub/me')).json.matches[0];
+    assert.deepEqual(Object.keys(view.a.lineup[0]).sort(), ['id', 'name']);
+    assert.deepEqual(Object.keys(view.b.lineup[0]), ['name']);
+    // Bob leaves FELL: out of the lineup
+    await s.as(BOB).post('/api/hub/clan/leave');
+    assert.equal((await s.as(ALICE).get('/api/hub/me')).json.matches[0].a.lineup.length, 0);
+    // result: FELL reports, MORG may not overwrite it
+    s.clock.t = at + 60000;
+    await s.as(ALICE).post(`/api/hub/matches/${id}/report`, { winner: 'FELL' });
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${id}/report`, { winner: 'MORG' })).json.error, 'already_reported');
+    // a proposal left unanswered past its date is cancelled by the sweep and can no longer be accepted
+    const p = (await s.as(ALICE).post('/api/hub/matches', { opponent: 'MORG', at: s.clock.t + 3600000, mode: 'Siege', size: 5 })).json.id;
+    s.clock.t += 2 * 3600000;
+    assert.equal((await s.as(CAROL).post(`/api/hub/matches/${p}/accept`)).json.error, 'proposal_expired');
+    s.app.sweep();
+    assert.equal(s.app.hub.store.get('SELECT status FROM matches WHERE id = ?', p).status, 'cancelled');
+    // erasure leaves no Steam or Discord id in the event log
+    const code = (await s.internal('POST', '/internal/hub/link-code', { discordId: '523456789012345678' })).json;
+    await s.as(DAVE).post('/api/hub/link', { code: code.code });
+    await s.internal('POST', '/internal/hub/players/forget', { steamId: DAVE, by: 'Admin' });
+    const db = s.app.hub.store;
+    assert.equal(db.get(`SELECT COUNT(*) AS n FROM events WHERE payload LIKE ? AND type <> 'member.left'`, `%${DAVE}%`).n, 0);
+    const left = db.all(`SELECT payload FROM events WHERE type = 'member.left'`).map((r) => JSON.parse(r.payload)).find((e) => e.erased);
+    assert.equal(left.discordId, '523456789012345678'); // the bot still removes the role
+    assert.equal(left.player, 'erased');
+    // a closed clan's open matches are cancelled
+    const q = (await s.as(CAROL).post('/api/hub/matches', { opponent: 'FELL', at: s.clock.t + 86400000, mode: 'Battle', size: 5 })).json.id;
+    await s.as(CAROL).post('/api/hub/clan/leave');
+    assert.equal(db.get('SELECT status FROM matches WHERE id = ?', q).status, 'cancelled');
+});

@@ -335,6 +335,10 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
     /** Discord id of a player (null when not linked): carried in the events so the bot can act on the right member. */
     const discordOf = (steamId) => (store.get('SELECT discord_id FROM players WHERE steam_id = ?', steamId) || {}).discord_id || null;
 
+    /** A player out of his clan: no longer in the lineups of matches still to play. */
+    const dropFromOpenLineups = (steamId) => store.run(
+        `DELETE FROM lineups WHERE steam_id = ? AND match_id IN (SELECT id FROM matches WHERE status IN ('proposed','accepted') AND starts_at > ?)`, steamId, now());
+
     const factionOf = (id) => factions.find((f) => f.id === id) || { id, name: id, side: null };
 
     const clanSummary = (c) => {
@@ -363,7 +367,9 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
             `SELECT * FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status NOT IN ('declined','cancelled') AND (starts_at >= ? OR status IN ('reported','disputed')) ORDER BY starts_at LIMIT 20`,
             m.id, m.id, now() - 7 * 86400000).map((row) => {
             const v = matchView(row, true);
-            v.mine = { signedUp: [...v.a.lineup, ...v.b.lineup].some((x) => x.id === steamId), side: row.clan_a === m.id ? 'a' : 'b' };
+            const side = row.clan_a === m.id ? 'a' : 'b';
+            v.mine = { signedUp: v[side].lineup.some((x) => x.id === steamId), side };
+            for (const k of ['a', 'b']) v[k].lineup = v[k].lineup.map((x) => (k === side ? { id: x.id, name: x.name } : { name: x.name }));
             return v;
         }) : [];
         return {
@@ -420,10 +426,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const t = now();
         const clan = store.get('SELECT * FROM clans WHERE id = ?', r.clan_id);
         if (accept) {
-            if (membership(r.steam_id)) {
-                store.run(`UPDATE requests SET status = 'expired', decided_by = ?, decided_at = ? WHERE id = ?`, steamId, t, r.id);
-                throw new HttpError(409, 'already_in_clan', 'this player joined another clan meanwhile');
-            }
+            if (membership(r.steam_id)) throw new HttpError(409, 'already_in_clan', 'this player joined another clan meanwhile: refuse the request');
             store.run(`INSERT INTO members (clan_id, steam_id, role, joined_at) VALUES (?, ?, 'member', ?)`, r.clan_id, r.steam_id, t);
             store.history(r.clan_id, 'joined', null, r.steam_id);
             store.event('member.joined', { tag: clan.tag, player: r.steam_id, discordId: discordOf(r.steam_id), by: steamId });
@@ -444,6 +447,10 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
     const closeClan = (clan, by, why) => {
         store.run(`UPDATE clans SET status = 'closed', decided_by = ?, decided_at = ?, reason = ? WHERE id = ?`, by, now(), why, clan.id);
         store.run(`UPDATE requests SET status = 'expired', decided_at = ? WHERE clan_id = ? AND status = 'pending'`, now(), clan.id);
+        for (const row of store.all(`SELECT * FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status IN ('proposed','accepted')`, clan.id, clan.id)) {
+            store.run(`UPDATE matches SET status = 'cancelled', waiting_for = NULL, updated_at = ? WHERE id = ?`, now(), row.id);
+            matchEvent('match.cancelled', row, { by: clan.tag, reason: 'clan closed' });
+        }
         store.history(clan.id, 'closed', why, by);
         store.event('clan.closed', { tag: clan.tag, by, reason: why });
     };
@@ -455,6 +462,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const count = store.get('SELECT COUNT(*) AS n FROM members WHERE clan_id = ?', m.id).n;
         if (m.role === 'leader' && count > 1) throw new HttpError(409, 'leader_must_hand_over', 'hand the leadership to another member before leaving');
         store.run('DELETE FROM members WHERE steam_id = ?', steamId);
+        dropFromOpenLineups(steamId);
         store.history(m.id, 'left', null, steamId);
         store.event('member.left', { tag: clan.tag, player: steamId, discordId: discordOf(steamId) });
         if (count === 1) closeClan(clan, steamId, 'last member left');
@@ -490,6 +498,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         if (!allowed) throw new HttpError(403, 'forbidden', 'the leader removes anyone, an officer removes members');
         const clan = store.get('SELECT * FROM clans WHERE id = ?', m.id);
         store.run('DELETE FROM members WHERE steam_id = ?', targetId);
+        dropFromOpenLineups(targetId);
         store.history(m.id, 'kicked', targetId, steamId);
         store.event('member.kicked', { tag: clan.tag, player: targetId, discordId: discordOf(targetId), by: steamId });
         return { kicked: targetId };
@@ -595,10 +604,12 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const by = cleanText(body.by, 64) || 'admin';
         const t = now();
         const m = membership(steamId);
+        let leftClanTag = null;
         if (m) {
             const clan = store.get('SELECT * FROM clans WHERE id = ?', m.id);
             store.run('DELETE FROM members WHERE steam_id = ?', steamId);
-            store.event('member.left', { tag: clan.tag, player: steamId, discordId: discordOf(steamId) });
+            dropFromOpenLineups(steamId);
+            leftClanTag = clan.tag;
             if (m.role === 'leader') {
                 const heir = store.get(`SELECT steam_id FROM members WHERE clan_id = ? ORDER BY CASE role WHEN 'officer' THEN 0 ELSE 1 END, joined_at LIMIT 1`, m.id);
                 if (heir) {
@@ -618,7 +629,13 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         store.run(`UPDATE clan_history SET detail = REPLACE(detail, ?, 'erased') WHERE detail LIKE ?`, steamId, `%${steamId}%`);
         store.run(`UPDATE clans SET created_by = 'erased' WHERE created_by = ?`, steamId);
         store.run(`UPDATE requests SET decided_by = 'erased' WHERE decided_by = ?`, steamId);
+        store.run(`UPDATE matches SET created_by = 'erased' WHERE created_by = ?`, steamId);
+        const discordId = discordOf(steamId);
+        store.run(`UPDATE events SET payload = REPLACE(payload, ?, 'erased') WHERE payload LIKE ?`, steamId, `%${steamId}%`);
+        if (discordId) store.run(`UPDATE events SET payload = REPLACE(payload, ?, 'erased') WHERE payload LIKE ?`, discordId, `%${discordId}%`);
         store.run('DELETE FROM players WHERE steam_id = ?', steamId);
+        // the bot removes the clan role from the Discord account (the only place the id still appears, by design)
+        if (leftClanTag) store.event('member.left', { tag: leftClanTag, player: 'erased', discordId, erased: true });
         store.event('player.erased', { by, at: t });
         log.info('hub.player.erased', { by });
         return { erased: true };
@@ -682,7 +699,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const size = Number(body.size);
         if (!Number.isInteger(size) || size < 1 || size > 100) throw new HttpError(400, 'bad_size', 'size: players per side, 1 to 100');
         const at = parseStart(body.at);
-        const open = store.get(`SELECT COUNT(*) AS n FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status IN ('proposed','accepted')`, m.id, m.id).n;
+        const open = store.get(`SELECT COUNT(*) AS n FROM matches WHERE (clan_a = ? OR clan_b = ?) AND status IN ('proposed','accepted') AND starts_at > ?`, m.id, m.id, now()).n;
         if (open >= hubConfig.maxOpenMatchesPerClan) throw new HttpError(409, 'too_many_matches', 'your clan already has too many open matches');
         const t = now();
         const result = store.run(
@@ -697,6 +714,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const { row, m, staff } = matchForStaff(steamId, id);
         if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer answers');
         if (row.status !== 'proposed' || row.waiting_for !== m.id) throw new HttpError(409, 'not_waiting_for_you', 'this proposal is not waiting for your clan');
+        if (row.starts_at <= now()) throw new HttpError(409, 'proposal_expired', 'the proposed date has passed: send a new challenge');
         const t = now();
         if (action === 'accept') {
             store.run(`UPDATE matches SET status = 'accepted', waiting_for = NULL, updated_at = ? WHERE id = ?`, t, row.id);
@@ -751,6 +769,7 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         const { row, m, staff } = matchForStaff(steamId, id);
         if (!staff) throw new HttpError(403, 'forbidden', 'only a leader or an officer reports the result');
         if (row.status !== 'accepted' && row.status !== 'reported') throw new HttpError(409, 'not_reportable', 'only an accepted match gets a result');
+        if (row.status === 'reported' && row.reported_by !== m.id) throw new HttpError(409, 'already_reported', 'the other clan reported a result: confirm or dispute it');
         if (row.starts_at > now()) throw new HttpError(409, 'not_started', 'the match has not started yet');
         const r = resultArgs(row, body);
         store.run(`UPDATE matches SET status = 'reported', winner = ?, draw = ?, score = ?, reported_by = ?, updated_at = ? WHERE id = ?`,
@@ -878,6 +897,13 @@ function createHub(config, { now = () => Date.now(), logger = silentLogger, env 
         store.run('DELETE FROM link_codes WHERE expires_at <= ?', t);
         // join requests left unanswered expire after the configured days
         store.run(`UPDATE requests SET status = 'expired', decided_at = ? WHERE status = 'pending' AND created_at <= ?`, t, t - hubConfig.requestTtlDays * 86400000);
+        // the bot reads events within seconds; 90 days keep a margin for a bot left stopped
+        store.run('DELETE FROM events WHERE created_at <= ?', t - 90 * 86400000);
+        // proposals nobody answered before their date are dropped
+        for (const row of store.all(`SELECT * FROM matches WHERE status = 'proposed' AND starts_at <= ?`, t)) {
+            store.run(`UPDATE matches SET status = 'cancelled', waiting_for = NULL, updated_at = ? WHERE id = ?`, t, row.id);
+            matchEvent('match.cancelled', row, { by: 'expiry', reason: 'no answer before the date' });
+        }
         writes.prune();
     }
 
