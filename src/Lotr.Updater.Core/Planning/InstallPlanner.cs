@@ -167,6 +167,7 @@ namespace Lotr.Updater.Core.Planning
                 switch (pf.Action)
                 {
                     case FileAction.CopyLocal:
+                        Stamp(plan, pf.LocalSource);
                         a.FromWorkshop = IsUnder(pf.LocalSource, workshopRoots);
                         if (a.FromWorkshop) { plan.WorkshopCopiedFiles++; plan.WorkshopReusedBytes += pf.Target.Size; }
                         break;
@@ -178,7 +179,7 @@ namespace Lotr.Updater.Core.Planning
                     case FileAction.Rebuild:
                         foreach (var (c, l) in pf.Chunks)
                         {
-                            if (l != null) plan.ReusedLocalChunks++;
+                            if (l != null) { plan.ReusedLocalChunks++; Stamp(plan, l.FullPath); }
                             else Need(c.Object, c.ObjectSize, c.Size, mod.IsCore());
                             if (l != null && IsUnder(l.FullPath, workshopRoots)) { a.FromWorkshop = true; plan.WorkshopReusedBytes += c.Size; }
                         }
@@ -288,6 +289,14 @@ namespace Lotr.Updater.Core.Planning
                 }
             }
             return roots;
+        }
+
+        /// <summary>Remembers size + date of a reused local file (re-checked right before the install).</summary>
+        private void Stamp(InstallPlan plan, string path)
+        {
+            if (string.IsNullOrEmpty(path) || plan.SourceStamps.ContainsKey(path)) return;
+            try { plan.SourceStamps[path] = new SourceStamp(_fs.GetFileLength(path), _fs.GetLastWriteTimeUtc(path)); }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
         }
 
         private static bool IsUnder(string path, List<string> folders) =>

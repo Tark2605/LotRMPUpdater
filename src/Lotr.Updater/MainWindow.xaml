@@ -103,7 +103,8 @@
                 <Border Background="#12C9A45C" BorderBrush="{StaticResource Gold}" BorderThickness="2,0,0,0" Padding="14,10" Margin="0,4,0,14"
                         Visibility="{Binding UpdaterUpdateReady, Converter={StaticResource Vis}}">
                     <DockPanel>
-                        <Button DockPanel.Dock="Right" Command="{Binding RestartToUpdateCommand}" Content="Restart now" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <Button DockPanel.Dock="Right" Command="{Binding RestartToUpdateCommand}" Content="Restart now" Margin="12,0,0,0" VerticalAlignment="Center"
+                                Visibility="{Binding CanRestartToUpdate, Converter={StaticResource Vis}}"/>
                         <TextBlock Text="{Binding UpdaterUpdateText}" Style="{StaticResource Body}" FontSize="14" VerticalAlignment="Center"/>
                     </DockPanel>
                 </Border>
@@ -123,6 +124,15 @@
                     <StackPanel>
                         <TextBlock Text="{Binding StatusTitle}" FontFamily="{StaticResource DisplayFont}" FontSize="32" Foreground="{StaticResource Bone}"/>
                         <TextBlock Text="{Binding StatusDetail}" Style="{StaticResource Lead}" Margin="0,6,0,0" Visibility="{Binding StatusDetail, Converter={StaticResource Vis}}"/>
+                        <!-- error report (begin) -->
+                        <StackPanel Visibility="{Binding StatusErrorDetail, Converter={StaticResource Vis}}" Margin="0,10,0,0">
+                            <Button Style="{StaticResource LinkButton}" Command="{Binding ReportProblemCommand}" CommandParameter="check" Content="Send a report to the team" HorizontalAlignment="Left"/>
+                            <Expander Margin="0,6,0,0" Foreground="{StaticResource Dust}">
+                                <Expander.Header><TextBlock Style="{StaticResource Muted}" Text="Details (for the team)"/></Expander.Header>
+                                <TextBox Style="{StaticResource LogBox}" Text="{Binding StatusErrorDetail, Mode=OneWay}" MaxHeight="120" Margin="0,6,0,0"/>
+                            </Expander>
+                        </StackPanel>
+                        <!-- error report (end) -->
                         <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Style="{StaticResource PrimaryButton}" Command="{Binding ReviewCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource Vis}, ConverterParameter=update}" Content="Update…"/>
                             <Button Style="{StaticResource PrimaryButton}" Command="{Binding ReviewCommand}" Margin="0,0,12,0" Visibility="{Binding StatusKind, Converter={StaticResource Vis}, ConverterParameter=missing}" Content="Install the mod…"/>
@@ -186,11 +196,61 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Visibility="{Binding ReleaseNotes, Converter={StaticResource Vis}}">
+                <!-- Opt-in: tick our modules in the official launcher's Multiplayer list (backup + undo). -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding ShowLauncherCard, Converter={StaticResource Vis}}">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource H2}" Text="WHAT'S NEW"/>
-                        <TextBlock Text="{Binding ReleaseNotes}" Style="{StaticResource Body}"/>
-                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" FontSize="12"><Run Text="✓ " Foreground="{StaticResource Elven}"/><Run Text="{Binding SignatureText, Mode=OneWay}"/></TextBlock>
+                        <TextBlock Style="{StaticResource H2}" Text="THE BANNERLORD LAUNCHER"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Command="{Binding TickLauncherModsCommand}" Content="Tick the mods in the Bannerlord launcher for me"/>
+                            <Button Style="{StaticResource LinkButton}" Command="{Binding UndoLauncherModsCommand}" Content="Undo" VerticalAlignment="Center" Margin="14,0,0,0"
+                                    Visibility="{Binding CanUndoLauncher, Converter={StaticResource Vis}}"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" FontSize="12.5" TextWrapping="Wrap" ToolTip="{Binding LauncherFilePath}"
+                                   Text="Changes only the launcher's Multiplayer mod list (nothing else), and only when you press the button. A copy of the previous list is kept next to it. Close the launcher first."/>
+                        <TextBlock Text="{Binding LauncherStatus}" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="{Binding LauncherStatus, Converter={StaticResource Vis}}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource Body}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LauncherStatusKind}" Value="ok"><Setter Property="Foreground" Value="{StaticResource Elven}"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding LauncherStatusKind}" Value="warn"><Setter Property="Foreground" Value="#E89A5C"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding LauncherStatusKind}" Value="error"><Setter Property="Foreground" Value="{StaticResource Rubric}"/></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <!-- What's new: notes of the signed release, shown as plain text. -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding NewsHeading, Converter={StaticResource Vis}}">
+                    <StackPanel>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Command="{Binding OpenNewsCommand}" Content="All news" VerticalAlignment="Top"
+                                    Visibility="{Binding ChroniclesUrl, Converter={StaticResource Vis}}" ToolTip="{Binding ChroniclesUrl}"/>
+                            <TextBlock Style="{StaticResource H2}" Text="{Binding NewsHeading}"/>
+                        </DockPanel>
+                        <TextBlock Text="{Binding NewsNote}" Style="{StaticResource Muted}" FontSize="12" Margin="0,0,0,6" Visibility="{Binding NewsNote, Converter={StaticResource Vis}}"/>
+                        <TextBlock Text="{Binding NewsBody}" Style="{StaticResource Body}" TextWrapping="Wrap"/>
+                        <Expander Margin="0,10,0,0" Foreground="{StaticResource Dust}" Visibility="{Binding PreviousNews.Count, Converter={StaticResource Vis}}">
+                            <Expander.Header>
+                                <TextBlock Style="{StaticResource Muted}" FontSize="12.5" Text="Earlier releases"/>
+                            </Expander.Header>
+                            <ItemsControl ItemsSource="{Binding PreviousNews}" Margin="0,6,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,10">
+                                            <TextBlock Style="{StaticResource Body}" FontSize="13.5">
+                                                <Run Text="{Binding Title, Mode=OneWay}" Foreground="{StaticResource Bone}"/>
+                                                <Run Text="·" Foreground="{StaticResource Dust}"/>
+                                                <Run Text="{Binding DateLabel, Mode=OneWay}" Foreground="{StaticResource Dust}"/>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Notes}" Style="{StaticResource Body}" FontSize="13" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Expander>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" FontSize="12" Visibility="{Binding SignatureText, Converter={StaticResource Vis}}"><Run Text="✓ " Foreground="{StaticResource Elven}"/><Run Text="{Binding SignatureText, Mode=OneWay}"/></TextBlock>
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -306,7 +366,21 @@
                         </Style.Triggers>
                     </Style>
                 </Border.Style>
-                <TextBlock Text="{Binding ProgressResult}" Style="{StaticResource Body}"/>
+                <StackPanel>
+                    <TextBlock Text="{Binding ProgressResult}" Style="{StaticResource Body}"/>
+                    <!-- error report (begin) -->
+                    <StackPanel Visibility="{Binding ProgressResultKind, Converter={StaticResource Vis}, ConverterParameter=error}" Margin="0,12,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource PrimaryButton}" Command="{Binding ReportProblemCommand}" CommandParameter="install" Content="Send a report to the team"/>
+                            <Button Command="{Binding InstallCommand}" Content="Try again" Margin="12,0,0,0" Padding="20,12"/>
+                        </StackPanel>
+                        <Expander Margin="0,10,0,0" Foreground="{StaticResource Dust}" Visibility="{Binding ProgressErrorDetail, Converter={StaticResource Vis}}">
+                            <Expander.Header><TextBlock Style="{StaticResource Muted}" Text="Details (for the team)"/></Expander.Header>
+                            <TextBox Style="{StaticResource LogBox}" Text="{Binding ProgressErrorDetail, Mode=OneWay}" MaxHeight="140" Margin="0,6,0,0"/>
+                        </Expander>
+                    </StackPanel>
+                    <!-- error report (end) -->
+                </StackPanel>
             </Border>
             <DockPanel Grid.Row="2" Margin="0,18,0,0">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
@@ -323,6 +397,15 @@
                 <TextBlock Style="{StaticResource Kicker}" Text="VERIFY MY INSTALL"/>
                 <TextBlock Style="{StaticResource Title}" Text="Is everything in order?"/>
                 <TextBlock Style="{StaticResource Lead}" Text="{Binding VerifySummary}" Margin="0,0,0,18"/>
+                <!-- error report (begin) -->
+                <StackPanel Visibility="{Binding VerifyKind, Converter={StaticResource Vis}, ConverterParameter=error}" Margin="0,-8,0,18">
+                    <Button Style="{StaticResource LinkButton}" Command="{Binding ReportProblemCommand}" CommandParameter="verify" Content="Send a report to the team" HorizontalAlignment="Left"/>
+                    <Expander Margin="0,6,0,0" Foreground="{StaticResource Dust}" Visibility="{Binding VerifyErrorDetail, Converter={StaticResource Vis}}">
+                        <Expander.Header><TextBlock Style="{StaticResource Muted}" Text="Details (for the team)"/></Expander.Header>
+                        <TextBox Style="{StaticResource LogBox}" Text="{Binding VerifyErrorDetail, Mode=OneWay}" MaxHeight="120" Margin="0,6,0,0"/>
+                    </Expander>
+                </StackPanel>
+                <!-- error report (end) -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
                     <Button Style="{StaticResource PrimaryButton}" Command="{Binding VerifyCommand}" Content="Verify now"/>
                     <Button Command="{Binding RepairCommand}" Content="Repair…" Margin="12,0,0,0" Padding="20,12"/>
@@ -342,10 +425,15 @@
             <StackPanel MaxWidth="900" HorizontalAlignment="Left">
                 <TextBlock Style="{StaticResource Kicker}" Text="SUPPORT"/>
                 <TextBlock Style="{StaticResource Title}" Text="Something is wrong? Send us your log"/>
+                <!-- error report (begin) -->
+                <Border Background="#1AE0563A" BorderBrush="{StaticResource Rubric}" BorderThickness="2,0,0,0" Padding="12,8" Margin="0,0,0,12" Visibility="{Binding SupportContext, Converter={StaticResource Vis}}">
+                    <TextBlock Text="{Binding SupportContext}" Style="{StaticResource Body}" FontSize="13"/>
+                </Border>
+                <!-- error report (end) -->
                 <TextBlock Style="{StaticResource Lead}" Margin="0,0,0,14"
                            Text="Below is exactly what would be sent — your Windows user name is replaced by &lt;user&gt;. Nothing is sent unless you press the button. You get a short code: paste it in your ticket on the LotR Discord, the team's bot attaches the log there."/>
                 <StackPanel Orientation="Horizontal">
-                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding SendSupportCommand}" Content="Send to support"/>
+                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding SendSupportCommand}" Content="Send the report"/>
                     <Button Command="{Binding CopyLogCommand}" Content="Copy log" Margin="12,0,0,0" Padding="20,12"/>
                     <Button Style="{StaticResource LinkButton}" Command="{Binding RefreshLogCommand}" Content="Refresh" Margin="18,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
@@ -354,8 +442,11 @@
                 <Border Background="#17C9A45C" BorderBrush="{StaticResource Gold}" BorderThickness="1" Padding="18,12" Visibility="{Binding SupportCode, Converter={StaticResource Vis}}" HorizontalAlignment="Left">
                     <StackPanel>
                         <TextBlock Style="{StaticResource Muted}" Text="Your support code" FontSize="12"/>
-                        <TextBox Text="{Binding SupportCode, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource DisplayFont}" FontSize="28" Foreground="{StaticResource GoldBright}" Background="Transparent" BorderThickness="0" Padding="0"/>
-                        <TextBlock Style="{StaticResource Body}" FontSize="13" Text="On Discord: open a ticket, then type /support code: followed by this code. The log is deleted after the team reads it."/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Command="{Binding CopySupportCodeCommand}" Content="Copy" Margin="14,0,0,0" VerticalAlignment="Center"/>
+                            <TextBox Text="{Binding SupportCode, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource DisplayFont}" FontSize="28" Foreground="{StaticResource GoldBright}" Background="Transparent" BorderThickness="0" Padding="0"/>
+                        </DockPanel>
+                        <TextBlock Style="{StaticResource Body}" FontSize="13" Text="On the LotR Discord: open a ticket, then type /support code: followed by this code. The log is deleted after the team reads it."/>
                     </StackPanel>
                 </Border>
                 <TextBlock Text="{Binding SupportStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" Visibility="{Binding SupportStatus, Converter={StaticResource Vis}}"/>
@@ -411,6 +502,14 @@
                 </Border>
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="BANNERLORD LAUNCHER"/>
+                        <CheckBox IsChecked="{Binding AutoTickLauncherMods}">
+                            <TextBlock Style="{StaticResource Body}" TextWrapping="Wrap" Text="Tick the mods automatically after each update. The app then ticks LotRMPCore and LotRMPEvent in the launcher's Multiplayer list after every successful update, keeps a copy of the previous list and lets you undo it on Home. Off by default; it never runs while the launcher or the game is open."/>
+                        </CheckBox>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
                         <TextBlock Style="{StaticResource H2}" Text="BACKUP AND REMOVAL"/>
                         <TextBlock Style="{StaticResource Body}" Text="Files replaced by the last update are kept until the next one." Margin="0,0,0,10"/>
                         <StackPanel Orientation="Horizontal">
@@ -443,7 +542,7 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="It never edits the launcher's settings: you tick the modules yourself. It never writes outside the folders above."/>
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0" Text="It changes the launcher's mod list only if you ask: the &quot;Tick the mods for me&quot; button on Home, or the option in Settings (off by default). Then only the Multiplayer list is touched, a dated copy of the previous file is kept next to it, and Undo puts it back. Otherwise you tick the modules yourself. It never writes outside the places above."/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource Card}">

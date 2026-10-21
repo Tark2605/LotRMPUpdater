@@ -209,7 +209,8 @@ namespace Lotr.Updater.Core.Net
                     }
                 }
                 catch (HttpRequestException ex) { why = ex.InnerException?.Message ?? ex.Message; }
-                catch (IOException ex) { why = ex.Message; }
+                // A full disk is not a network problem: retrying would only fail again (and hide the real cause).
+                catch (IOException ex) when (!PlayerErrors.IsDiskFull(ex)) { why = ex.Message; }
                 catch (TaskCanceledException) when (!ct.IsCancellationRequested) { why = "timeout"; }
                 catch (ObjectDisposedException ex) { why = ex.Message; }
 

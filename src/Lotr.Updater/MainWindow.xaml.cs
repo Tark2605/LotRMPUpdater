@@ -29,10 +29,16 @@ namespace Lotr.Updater
             DataContext = _vm;
             _vm.LogAppended += () => LiveLog.ScrollToEnd();
             _vm.TrayNotification += (title, text) => _tray?.Notify(title, text);
-            _vm.RestartRequested += () => { _exiting = true; Close(); };
-            SourceInitialized += (s, e) => WindowChrome.UseDarkTitleBar(this);
+            _vm.RestartRequested += ExitForRestart;
+            StartupGuard.UseLog(_vm.Service.Log);
+            StartupGuard.Trace("window constructed");
+            SourceInitialized += (s, e) => { StartupGuard.Trace("SourceInitialized"); WindowChrome.UseDarkTitleBar(this); };
+            // First show: if no frame is rendered within a few seconds (GPU driver, overlay), restart in software rendering.
+            IsVisibleChanged += (s, e) => { if (IsVisible) StartupGuard.ArmRenderWatchdog(); };
+            ContentRendered += (s, e) => StartupGuard.Rendered();
             Loaded += async (s, e) =>
             {
+                StartupGuard.Trace("Loaded");
                 await BeginAsync();
                 if (_options.TourDir != null) await TourAsync(_options.TourDir);
             };
@@ -59,6 +65,7 @@ namespace Lotr.Updater
         public void ShowFromTray()
         {
             if (_tray != null) _tray.Visible = false;
+            _vm.InTray = false;
             Show();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
@@ -72,6 +79,17 @@ namespace Lotr.Updater
                     () => Dispatcher.BeginInvoke(new Action(ExitFromTray)));
             _tray.Visible = true;
             _vm.InTray = true;
+        }
+
+        /// <summary>A newer updater asks this one to exit: only when nothing is running (an install is never cut).</summary>
+        public bool CanExitForTakeOver => !_vm.Busy;
+
+        /// <summary>Quits for real (restart into a new updater, or a newer one takes over), even from the tray.</summary>
+        public void ExitForRestart()
+        {
+            _exiting = true;
+            Close();
+            Application.Current.Shutdown();
         }
 
         private void ExitFromTray()

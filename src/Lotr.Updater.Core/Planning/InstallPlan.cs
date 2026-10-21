@@ -99,5 +99,17 @@ namespace Lotr.Updater.Core.Planning
         public long WorkshopReusedBytes { get; set; }
         public int WorkshopCopiedFiles { get; set; }
         public bool NeedsCoreSlot => Downloads.Any(d => d.IsCore);
+
+        /// <summary>Size and date of every local file the plan reuses (CopyLocal sources, files giving reused chunks), as seen
+        /// when the plan was made. The engine re-checks them right before applying: a plan can be hours old, and Steam deletes
+        /// or rewrites Workshop files on its own (unsubscribe, item update).</summary>
+        public Dictionary<string, SourceStamp> SourceStamps { get; } = new Dictionary<string, SourceStamp>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public struct SourceStamp
+    {
+        public SourceStamp(long length, DateTime lastWriteUtc) { Length = length; LastWriteUtc = lastWriteUtc; }
+        public long Length { get; }
+        public DateTime LastWriteUtc { get; }
     }
 }

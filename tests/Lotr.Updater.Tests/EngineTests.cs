@@ -281,7 +281,9 @@ namespace Lotr.Updater.Tests
                 InstallException ex;
                 using (new FileStream(dll, FileMode.Open, FileAccess.Read, FileShare.None))
                     ex = await Assert.ThrowsAsync<InstallException>(() => s.InstallAsync(c.Plan, null, CancellationToken.None));
-                Assert.Contains("Bannerlord.exe (PID 4242)", ex.Message);
+                Assert.Contains("Bannerlord.exe is using it", ex.Message); // named by Restart Manager, without jargon
+                Assert.Contains("(PID 4242)", s.Log.ReadRecent());             // the PID stays in the log
+                Assert.False(PlayerErrors.LooksTechnical(ex.Message));
                 Assert.True(ex.RolledBack);
                 Assert.Equal(Dll1, File.ReadAllBytes(dll));
                 Assert.Equal(Items, File.ReadAllBytes(h.ModuleFile("LotRMPEvent", "ModuleData/items.xml")));

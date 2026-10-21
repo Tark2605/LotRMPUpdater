@@ -23,7 +23,7 @@ namespace Lotr.Updater.Core
 {
     public sealed class UpdaterConfig
     {
-        public string AppVersion { get; set; } = "0.1.2";
+        public string AppVersion { get; set; } = "0.2.0";
         public string BaseUrl { get; set; } = ServerEndpoints.ProductionBase;
         /// <summary>Dev mode: local test server, a fixed fake game folder, extra trusted test key. Shown in red in the UI.</summary>
         public bool Dev { get; set; }
@@ -43,6 +43,8 @@ namespace Lotr.Updater.Core
         public VerificationResult Signature { get; set; }
         public InstallPlan Plan { get; set; }
         public string Error { get; set; }
+        /// <summary>Technical cause of <see cref="Error"/> (log / "Details" only; may be in the player's Windows language).</summary>
+        public string ErrorDetail { get; set; }
         public bool UpToDate => Plan != null && !Plan.HasChanges;
         /// <summary>The server offers an OLDER release than the installed one (CONTRACTS §8 anti-rollback): only installed after the player agrees.</summary>
         public bool RollbackOffered { get; set; }
@@ -212,10 +214,11 @@ namespace Lotr.Updater.Core
                 if (installed != null && installed.PublishedUtc() > m.PublishedUtc() && State.AllowRollbackTo != m.ReleaseId)
                 {
                     r.RollbackOffered = true;
-                    r.Error = $"The server now offers an OLDER release ({m.ReleaseId}, published {m.PublishedAt}) than the one installed ({installed.ReleaseId}, {installed.PublishedAt}). " +
-                              "This happens when the team rolls back a broken update; it could also be an attack replaying an old release. Nothing was changed. " +
-                              "If the team announced a rollback on Discord, press \"Accept the rollback\".";
-                    Log.Warn(r.Error);
+                    r.Error = $"The server now offers an older release ({m.ReleaseId}, published {m.PublishedAt}) than the one you have ({installed.ReleaseId}). " +
+                              "This normally means the team took back a broken update. Nothing was changed. " +
+                              "Press \"Accept the rollback\" only if the team announced it on Discord; otherwise just check again later.";
+                    // The other possible cause (someone replaying an old signed release) is for the log, not to frighten players.
+                    Log.Warn(r.Error + " (An unannounced rollback could also be a replayed old release: refused until the player accepts.)");
                     return r;
                 }
                 status?.Report("Comparing with the files on your PC…");
@@ -237,10 +240,12 @@ namespace Lotr.Updater.Core
                     : "Your mod files are up to date.");
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) when (ex is HttpFetchException || ex is InstallException || ex is ManifestException || ex is FormatException || ex is HttpRequestException || ex is IOException || ex is NotSupportedException || ex is CorruptObjectException || ex is UnauthorizedAccessException)
+            catch (Exception ex) when (ex is HttpFetchException || ex is InstallException || ex is ManifestException || ex is FormatException || ex is HttpRequestException || ex is IOException || ex is NotSupportedException || ex is CorruptObjectException || ex is UnauthorizedAccessException || ex is InvalidDataException)
             {
-                r.Error = ex.Message;
-                Log.Error(ex.Message);
+                var p = PlayerErrors.ForCheck(ex);
+                r.Error = p.Message;
+                r.ErrorDetail = p.Detail;
+                Log.Error("Check failed: " + PlayerErrors.Technical(ex));
             }
             return r;
         }
@@ -259,7 +264,30 @@ namespace Lotr.Updater.Core
 
         public async Task<string> InstallAsync(InstallPlan plan, IProgress<EngineProgress> progress, CancellationToken ct)
         {
-            var backup = await Engine.ApplyAsync(plan, State, progress, ct).ConfigureAwait(false);
+            string backup;
+            try
+            {
+                backup = await Engine.ApplyAsync(plan, State, progress, ct).ConfigureAwait(false);
+            }
+            catch (InstallException ex) when (ex.CanReplan && !ct.IsCancellationRequested && Game != null)
+            {
+                // Second safety net: a reused local file (Steam Workshop copy, moved file) failed even after the engine's own
+                // fallback, and everything was put back. Compare with the disk again (fresh plan: it downloads what is gone) and
+                // try exactly once more before telling the player.
+                Log.Warn("Install failed because of a reused local file (" + ex.Detail + "); checking the files again and retrying once.");
+                progress?.Report(new EngineProgress { Phase = EnginePhase.Checking, Message = "Some files changed while installing; checking again…" });
+                InstallPlan fresh;
+                try { fresh = await Planner.PlanAsync(plan.Manifest, plan.ManifestBytes, Game, InstalledForPlanning(), State.InstalledReleaseId, forceHash: false, null, ct).ConfigureAwait(false); }
+                catch (Exception pex) when (!(pex is OperationCanceledException))
+                {
+                    Log.Error("Could not check the files again: " + PlayerErrors.Technical(pex));
+                    throw ex;
+                }
+                fresh.SignatureStatus = plan.SignatureStatus;
+                Hashes.Save();
+                backup = await Engine.ApplyAsync(fresh, State, progress, ct).ConfigureAwait(false);
+                plan = fresh;
+            }
             SaveInstalledManifest(plan.ManifestBytes);
             if (State.AllowRollbackTo == plan.Manifest.ReleaseId) State.AllowRollbackTo = null;
             SaveState();
@@ -322,14 +350,39 @@ namespace Lotr.Updater.Core
             sb.AppendLine($"Windows {Environment.OSVersion.VersionString}  64-bit {Environment.Is64BitOperatingSystem}");
             if (Game != null) sb.AppendLine($"Game: {Game.StoreLabel} {Game.GameVersion} at {Game.Root} (writable {Game.Writable})");
             if (LastSearch?.ReportForLog != null) { sb.AppendLine("--- game detection ---"); sb.AppendLine(LastSearch.ReportForLog); }
+            // A start-up crash leaves logs\crash-*.txt (written by the start-up guard): the most recent one of the last 7 days
+            // travels with the report, so a player whose app failed to start can still send it from the Support page.
+            var crash = LatestCrashReport(TimeSpan.FromDays(7));
+            if (crash != null)
+            {
+                sb.AppendLine("--- latest crash report (" + Path.GetFileName(crash) + ") ---");
+                try { sb.AppendLine(File.ReadAllText(crash, Encoding.UTF8)); }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { sb.AppendLine("(unreadable: " + ex.Message + ")"); }
+            }
             sb.AppendLine("--- log ---");
             sb.Append(recent);
             return LogMasker.Mask(sb.ToString());
         }
 
+        /// <summary>Newest logs\crash-*.txt younger than <paramref name="maxAge"/>, or null.</summary>
+        public string LatestCrashReport(TimeSpan maxAge)
+        {
+            try
+            {
+                if (!Directory.Exists(Paths.LogDir)) return null;
+                return Directory.GetFiles(Paths.LogDir, "crash-*.txt")
+                    .Select(f => new FileInfo(f))
+                    .Where(f => DateTime.UtcNow - f.LastWriteTimeUtc <= maxAge)
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .Select(f => f.FullName)
+                    .FirstOrDefault();
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
+        }
+
         public Task<SupportCode> SendSupportAsync(string maskedLog, CancellationToken ct) => Support.SendAsync(State.InstallId, Config.AppVersion, maskedLog, ct);
 
-        /// <summary>Modules the player must tick in the official launcher (the app never edits the launcher's settings).</summary>
+        /// <summary>Modules the player must tick in the official launcher (the app edits the launcher's list only on request: Game/LauncherSelection.cs).</summary>
         /// <summary>The installed release's manifest when it matches state.json (its file list drives deletions).</summary>
         private ReleaseManifest InstalledForPlanning() =>
             InstalledManifest != null && InstalledManifest.ReleaseId == State.InstalledReleaseId ? InstalledManifest : null;

@@ -61,6 +61,9 @@ namespace Lotr.Updater.Core.Model
         public string AllowRollbackTo { get; set; }
         /// <summary>Updater version the player rolled back from: never offered again (a newer one is).</summary>
         public string SkippedUpdaterVersion { get; set; }
+        /// <summary>Opt-in, off by default: after each successful update, tick our modules in the launcher's Multiplayer list
+        /// (LauncherSelection, with a backup). Never done without this setting or a click.</summary>
+        public bool AutoTickLauncherMods { get; set; }
 
         public static UpdaterState Load(string file)
         {
@@ -85,6 +88,7 @@ namespace Lotr.Updater.Core.Model
                     LastCheckUtc = o.Str("lastCheckUtc"),
                     AllowRollbackTo = o.Str("allowRollbackTo"),
                     SkippedUpdaterVersion = o.Str("skippedUpdaterVersion"),
+                    AutoTickLauncherMods = o.Bool("autoTickLauncherMods"),
                 };
                 return s;
             }
@@ -114,6 +118,7 @@ namespace Lotr.Updater.Core.Model
                 ["lastCheckUtc"] = LastCheckUtc,
                 ["allowRollbackTo"] = AllowRollbackTo,
                 ["skippedUpdaterVersion"] = SkippedUpdaterVersion,
+                ["autoTickLauncherMods"] = AutoTickLauncherMods,
             };
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             var tmp = file + ".tmp";

@@ -92,7 +92,10 @@ namespace Lotr.Updater.ViewModels
             // Dev runs never touch the real Startup folder: a test folder inside the dev home stands in for it.
             _startup = new StartupRegistration(options.Dev ? Path.Combine(paths.Home, "startup-folder-test") : StartupRegistration.UserStartupFolder,
                 paths.InstalledExe, new ComShortcutWriter());
-            _svc.Log.Line += l => _ui.BeginInvoke(new Action(() => AppendLog(l)));
+            // Log lines reach the screen in batches (4 per second, below input and rendering): a busy install never floods the UI thread.
+            _svc.Log.Line += l => _pendingLog.Enqueue(l);
+            _logFlush = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Background, (s, e) => FlushLog(), _ui);
+            _logFlush.Start();
             IsDev = options.Dev;
 
             NavigateCommand = new RelayCommand(p => Page = (Page)Enum.Parse(typeof(Page), p.ToString()));
@@ -104,7 +107,11 @@ namespace Lotr.Updater.ViewModels
             VerifyCommand = new RelayCommand(() => _ = VerifyAsync(), () => !Busy && HasGame);
             RepairCommand = new RelayCommand(() => { if (_repairPlan != null) ShowPlan(_repairPlan, "Repair my install"); }, () => !Busy && _repairPlan != null && _repairPlan.HasChanges);
             SendSupportCommand = new RelayCommand(() => _ = SendSupportAsync(), () => !Busy && !string.IsNullOrEmpty(SupportLog));
-            CopyLogCommand = new RelayCommand(() => { try { Clipboard.SetText(SupportLog ?? ""); SupportStatus = "The log is in your clipboard."; } catch (Exception ex) { SupportStatus = ex.Message; } });
+            CopyLogCommand = new RelayCommand(() => { try { Clipboard.SetText(SupportLog ?? ""); SupportStatus = "The log is in your clipboard."; } catch (Exception ex) { _svc.Log.Warn("Clipboard: " + ex.Message); SupportStatus = "The clipboard is busy (another program is using it). Try again in a moment."; } });
+            // --- error reports (begin) ---
+            ReportProblemCommand = new RelayCommand(p => OpenReport(p as string), _ => !Busy);
+            CopySupportCodeCommand = new RelayCommand(() => { try { Clipboard.SetText(SupportCode ?? ""); SupportStatus = "Code copied. Paste it in your Discord ticket."; } catch (Exception ex) { _svc.Log.Warn("Clipboard: " + ex.Message); SupportStatus = "The clipboard is busy. Select the code and copy it by hand."; } }, () => !string.IsNullOrEmpty(SupportCode));
+            // --- error reports (end) ---
             RefreshLogCommand = new RelayCommand(RefreshSupportLog);
             OpenLogsCommand = new RelayCommand(() => OpenFolder(_svc.Paths.LogDir));
             OpenBackupCommand = new RelayCommand(() => OpenFolder(_svc.Paths.BackupRoot));
@@ -118,7 +125,7 @@ namespace Lotr.Updater.ViewModels
                 RollbackOffered = false;
                 _ = CheckAsync(true);
             }, () => !Busy && RollbackOffered);
-            RestartToUpdateCommand = new RelayCommand(RestartToUpdate, () => !Busy && UpdaterUpdateReady);
+            RestartToUpdateCommand = new RelayCommand(() => RestartToUpdate(false), () => !Busy && CanRestartToUpdate);
             RollbackUpdaterCommand = new RelayCommand(RollbackUpdater, () => !Busy && PreviousUpdaterVersion != null);
             UninstallCommand = new RelayCommand(() => new UninstallWindow(_options) { Owner = Application.Current.MainWindow }.ShowDialog());
 
@@ -159,6 +166,9 @@ namespace Lotr.Updater.ViewModels
         public RelayCommand VerifyCommand { get; }
         public RelayCommand RepairCommand { get; }
         public RelayCommand SendSupportCommand { get; }
+        /// <summary>"Send a report to the team" in every error box: opens the Support page on this problem (nothing is sent yet).</summary>
+        public RelayCommand ReportProblemCommand { get; }
+        public RelayCommand CopySupportCodeCommand { get; }
         public RelayCommand CopyLogCommand { get; }
         public RelayCommand RefreshLogCommand { get; }
         public RelayCommand OpenLogsCommand { get; }
@@ -219,6 +229,7 @@ namespace Lotr.Updater.ViewModels
         {
             UpdateCountdown();
             if (!Busy && HasGame && DateTime.UtcNow >= _nextAutoCheckUtc) _ = CheckAsync(false);
+            TickSelfUpdate();
         }
 
         private void UpdateCountdown()
@@ -239,8 +250,8 @@ namespace Lotr.Updater.ViewModels
         {
             _svc.Log.Info($"LotRMPUpdater {AppVersion} started{(IsDev ? " in DEV mode against " + _options.Server : "")}.");
             _svc.Log.Prune();
-            if (!IsDev && _options.TourDir == null)
-                await Task.Run(() => SelfInstall.Ensure(_svc.Paths, AppVersion, _svc.Log));
+            if ((!IsDev || _options.DevSelfInstall) && _options.TourDir == null)
+                await Task.Run(() => SelfInstall.Ensure(_svc.Paths, AppVersion, _svc.Log, SelfInstall.TargetsFor(_options, _svc.Paths)));
             Busy = true;
             BusyText = "Looking for Bannerlord…";
             try { await Task.Run(() => _svc.LocateGame()); }
@@ -248,6 +259,7 @@ namespace Lotr.Updater.ViewModels
             RefreshGame();
             ShowInstalled();
             _clock.Start();
+            _ = CheckSelfUpdateAsync(true); // the updater updates itself even when the game is not found
             if (HasGame) await CheckAsync(false);
         }
 
@@ -285,7 +297,9 @@ namespace Lotr.Updater.ViewModels
                 foreach (var x in m.Modules)
                     Modules.Add(new ModuleRow { Name = x.DisplayName(), Version = x.Version, Detail = "Modules\\" + x.Folder + " · " + Units.Bytes(x.TotalSize) });
             var tick = _svc.ModulesToTick(_latest?.Manifest ?? m);
-            TickHint = tick.Count == 0 ? null : "In the launcher's Multiplayer tab, tick " + Join(tick) + " (this app never changes the launcher's settings).";
+            TickHint = tick.Count == 0 ? null : "In the launcher's Multiplayer tab, tick " + Join(tick) + " (or let this app do it for you below: it changes the launcher's list only when you ask).";
+            RefreshLauncherCard();
+            RefreshNews();
         }
 
         private static string Plural(int n, string word) => n + " " + word + (n == 1 ? "" : "s");
@@ -325,7 +339,7 @@ namespace Lotr.Updater.ViewModels
                 _notifiedRelease = _latest.Manifest.ReleaseId;
                 TrayNotification?.Invoke("LotR MP Event: update available", ReleaseLabel(_latest.Manifest) + ". Click to review it (nothing is installed without your click).");
             }
-            await CheckSelfUpdateAsync();
+            await CheckSelfUpdateAsync(userAsked);
         }
 
         // ------------------------------------------------------------ self-update of this app
@@ -333,14 +347,25 @@ namespace Lotr.Updater.ViewModels
         /// <summary>Banner on Home when a newer updater is downloaded and verified (null hides it).</summary>
         public string UpdaterUpdateText { get => _updaterUpdateText; set { if (Set(ref _updaterUpdateText, value)) Raise(nameof(UpdaterUpdateReady)); } }
         public bool UpdaterUpdateReady => _updaterUpdateText != null;
+        private bool _canRestartToUpdate;
+        /// <summary>"Restart now" is shown only when it works: a verified update is staged and this is the installed copy.</summary>
+        public bool CanRestartToUpdate { get => _canRestartToUpdate; set { if (Set(ref _canRestartToUpdate, value)) CommandRequery(); } }
         private bool _selfUpdateRunning;
+        private string _stagedUpdaterVersion;
+        private DateTime _nextSelfUpdateCheckUtc = DateTime.MaxValue;
+        private DateTime? _autoRestartAtUtc;
+        /// <summary>Notice shown this long before the automatic restart (window visible); in the tray it restarts at once.</summary>
+        private static readonly TimeSpan AutoRestartNotice = TimeSpan.FromSeconds(8);
 
         /// <summary>Reads files/updater/latest.json; a newer updater is downloaded, checked (SHA-256, release-key signature,
-        /// Authenticode signer) and staged; it replaces this exe at the next start (or now, with "Restart now").</summary>
-        private async Task CheckSelfUpdateAsync()
+        /// Authenticode signer) and staged. It is applied automatically as soon as the app is idle (<see cref="TickSelfUpdate"/>),
+        /// or at the next start. Runs at start-up and every 2 hours, with or without the game.</summary>
+        private async Task CheckSelfUpdateAsync(bool force = false)
         {
             if (_selfUpdateRunning || _options.TourDir != null) return;
+            if (!force && DateTime.UtcNow < _nextSelfUpdateCheckUtc && _nextSelfUpdateCheckUtc != DateTime.MaxValue) return;
             _selfUpdateRunning = true;
+            bool failed = false;
             try
             {
                 var su = _svc.SelfUpdate;
@@ -353,34 +378,105 @@ namespace Lotr.Updater.ViewModels
                 if (pending != null)
                 {
                     bool installedCopy = SelfInstall.IsRunningInstalledCopy(_svc.Paths);
-                    UpdaterUpdateText = "A new version of this updater (" + pending.Version + ") is downloaded and checked. " +
-                                        (installedCopy ? "It replaces this one the next time the app starts; the current one is kept so you can go back."
-                                                       : "Start the app from the Start menu to use it.");
-                    if (InTray && _notifiedRelease != "updater-" + pending.Version)
-                    {
-                        _notifiedRelease = "updater-" + pending.Version;
-                        TrayNotification?.Invoke("LotR MP Event updater " + pending.Version + " is ready", "It is used the next time the app starts.");
-                    }
+                    _stagedUpdaterVersion = pending.Version;
+                    CanRestartToUpdate = installedCopy;
+                    if (_autoRestartAtUtc == null)
+                        UpdaterUpdateText = "A new version of this updater (" + pending.Version + ") is downloaded and checked. " +
+                                            (installedCopy ? "It installs itself as soon as nothing is running; the current one is kept so you can go back."
+                                                           : "It is used the next time you start the app from the Start menu or the Desktop.");
                 }
             }
-            catch (Exception ex) when (ex is Core.SelfUpdate.SelfUpdateException || ex is Core.Net.HttpFetchException || ex is System.Net.Http.HttpRequestException || ex is IOException || ex is UnauthorizedAccessException)
+            catch (Exception ex) when (ex is Core.SelfUpdate.SelfUpdateException || ex is Core.Net.HttpFetchException || ex is System.Net.Http.HttpRequestException ||
+                                       ex is IOException || ex is UnauthorizedAccessException || ex is TaskCanceledException)
             {
+                failed = true;
                 _svc.Log.Warn("Updater self-update: " + ex.Message);
             }
-            finally { _selfUpdateRunning = false; CommandRequery(); }
+            finally
+            {
+                _selfUpdateRunning = false;
+                _nextSelfUpdateCheckUtc = DateTime.UtcNow.Add(failed ? TimeSpan.FromMinutes(30) : TimeSpan.FromHours(2));
+                CommandRequery();
+            }
         }
 
-        private void RestartToUpdate()
+        /// <summary>Every second: the periodic self-update check, and the automatic restart into a staged updater when the
+        /// app is idle (no install, verify or download running, the update plan not open). Also runs in the tray.</summary>
+        private void TickSelfUpdate()
         {
-            var exe = _svc.Paths.InstalledExe;
-            if (!SelfInstall.IsRunningInstalledCopy(_svc.Paths) || !File.Exists(exe)) return;
+            if (_options.TourDir != null) return;
+            var now = DateTime.UtcNow;
+            if (!_selfUpdateRunning && _nextSelfUpdateCheckUtc != DateTime.MaxValue && now >= _nextSelfUpdateCheckUtc) _ = CheckSelfUpdateAsync();
+            bool idle = !Busy && !_selfUpdateRunning && Page != Page.Plan;
+            if (CanRestartToUpdate && idle && AutoRestartAllowed(_stagedUpdaterVersion))
+            {
+                if (_autoRestartAtUtc == null)
+                {
+                    _autoRestartAtUtc = now.Add(InTray ? TimeSpan.Zero : AutoRestartNotice);
+                    UpdaterUpdateText = "Updating the updater to " + _stagedUpdaterVersion + "… it restarts in a few seconds.";
+                    _svc.Log.Info("Updater " + _stagedUpdaterVersion + " is ready; restarting into it" + (InTray ? " (tray)." : " in " + AutoRestartNotice.TotalSeconds + " s."));
+                }
+                else if (now >= _autoRestartAtUtc.Value) RestartToUpdate(true);
+            }
+            else if (_autoRestartAtUtc != null && !(CanRestartToUpdate && idle))
+            {
+                // Something started meanwhile (install, verify, plan): wait for the next idle moment.
+                _autoRestartAtUtc = null;
+                UpdaterUpdateText = "A new version of this updater (" + _stagedUpdaterVersion + ") is ready. It installs itself as soon as nothing is running.";
+            }
+        }
+
+        private string AutoRestartFile => Path.Combine(_svc.Paths.UpdateDir, "auto-restart.txt");
+
+        /// <summary>At most two automatic restarts per staged version: if the swap keeps failing (file locked), the app does
+        /// not restart in a loop; the next manual start or "Restart now" still applies it.</summary>
+        private bool AutoRestartAllowed(string version)
+        {
             try
             {
-                // The new process waits for this one to exit, swaps the exe and starts the new version.
-                Process.Start(new ProcessStartInfo(exe, "--after " + Process.GetCurrentProcess().Id) { UseShellExecute = false })?.Dispose();
+                if (!File.Exists(AutoRestartFile)) return true;
+                var parts = File.ReadAllText(AutoRestartFile).Trim().Split(' ');
+                return !(parts.Length == 2 && parts[0] == version && int.TryParse(parts[1], out var n) && n >= 2);
+            }
+            catch (Exception) { return true; }
+        }
+
+        private void CountAutoRestart(string version)
+        {
+            try
+            {
+                int n = 0;
+                if (File.Exists(AutoRestartFile))
+                {
+                    var parts = File.ReadAllText(AutoRestartFile).Trim().Split(' ');
+                    if (parts.Length == 2 && parts[0] == version) int.TryParse(parts[1], out n);
+                }
+                Directory.CreateDirectory(_svc.Paths.UpdateDir);
+                File.WriteAllText(AutoRestartFile, version + " " + (n + 1));
+            }
+            catch (Exception) { }
+        }
+
+        private void RestartToUpdate(bool automatic)
+        {
+            var exe = _svc.Paths.InstalledExe;
+            if (!CanRestartToUpdate || !File.Exists(exe)) return;
+            try
+            {
+                if (automatic) CountAutoRestart(_stagedUpdaterVersion);
+                // The new process waits for this one to exit, swaps the exe, starts the new version and watches that it
+                // starts properly (else it rolls back). Same options; back in the tray if the window was hidden.
+                Process.Start(new ProcessStartInfo(exe, Program.RestartArguments(minimized: InTray)) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe) })?.Dispose();
+                _svc.Log.Info("Restarting to install updater " + _stagedUpdaterVersion + (automatic ? " (automatic, the app was idle)." : "."));
                 RestartRequested?.Invoke();
             }
-            catch (Exception ex) { _svc.Log.Error("Could not restart: " + ex.Message); }
+            catch (Exception ex)
+            {
+                _svc.Log.Error("Could not restart: " + ex.Message);
+                CanRestartToUpdate = false;
+                _autoRestartAtUtc = null;
+                UpdaterUpdateText = "A new version of this updater (" + _stagedUpdaterVersion + ") is ready. It is used the next time the app starts.";
+            }
         }
 
         /// <summary>Version kept as LotRMPUpdater.old.exe after a self-update (null: nothing to go back to).</summary>
@@ -393,7 +489,7 @@ namespace Lotr.Updater.ViewModels
             if (r != MessageBoxResult.Yes) return;
             try
             {
-                Process.Start(new ProcessStartInfo(_svc.Paths.InstalledExe, "--rollback-updater --after " + Process.GetCurrentProcess().Id) { UseShellExecute = false })?.Dispose();
+                Process.Start(new ProcessStartInfo(_svc.Paths.InstalledExe, "--rollback-updater " + Program.RestartArguments(minimized: false)) { UseShellExecute = false })?.Dispose();
                 RestartRequested?.Invoke();
             }
             catch (Exception ex) { _svc.Log.Error("Could not roll back the updater: " + ex.Message); }
@@ -403,6 +499,7 @@ namespace Lotr.Updater.ViewModels
         {
             LastCheck = "Last check " + DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
             RollbackOffered = r.RollbackOffered;
+            StatusErrorDetail = null;
             if (r.RollbackOffered)
             {
                 StatusKind = "error";
@@ -415,6 +512,7 @@ namespace Lotr.Updater.ViewModels
                 StatusKind = "error";
                 StatusTitle = "Could not check for updates";
                 StatusDetail = r.Error;
+                StatusErrorDetail = r.ErrorDetail;
                 return;
             }
             SignatureText = r.Signature?.Message;
@@ -539,11 +637,16 @@ namespace Lotr.Updater.ViewModels
         public string LogText { get => _logText; set => Set(ref _logText, value); }
         public event Action LogAppended;
 
-        private void AppendLog(LogLine l)
+        private readonly System.Collections.Concurrent.ConcurrentQueue<LogLine> _pendingLog = new System.Collections.Concurrent.ConcurrentQueue<LogLine>();
+        private readonly DispatcherTimer _logFlush;
+
+        /// <summary>UI thread, every 250 ms: appends the waiting lines in one go. The on-screen log keeps the last ~150 KB
+        /// (the full log is in the file).</summary>
+        private void FlushLog()
         {
-            if (l.Level == LogLevel.Detail && !IsDev) { }
-            _log.AppendLine(l.ToString());
-            if (_log.Length > 400_000) _log.Remove(0, _log.Length - 300_000);
+            if (_pendingLog.IsEmpty) return;
+            while (_pendingLog.TryDequeue(out var l)) _log.AppendLine(l.ToString());
+            if (_log.Length > 200_000) _log.Remove(0, _log.Length - 150_000);
             LogText = _log.ToString();
             LogAppended?.Invoke();
         }
@@ -556,6 +659,7 @@ namespace Lotr.Updater.ViewModels
             Busy = true;
             BusyText = "Installing…";
             ProgressResult = null;
+            ProgressErrorDetail = null;
             ProgressResultKind = null;
             ProgressValue = 0;
             ProgressTitle = "Starting…";
@@ -572,6 +676,8 @@ namespace Lotr.Updater.ViewModels
                                  " " + (TickHint ?? "") + " You can launch the game.";
                 _shownPlan = null;
                 HasPlan = false;
+                var autoTick = await AfterInstallLauncherTickAsync(); // opt-in Settings option only (launcher region)
+                if (autoTick != null) ProgressResult += " " + autoTick;
             }
             catch (OperationCanceledException)
             {
@@ -579,12 +685,17 @@ namespace Lotr.Updater.ViewModels
                 ProgressResultKind = "warn";
                 ProgressResult = "Cancelled. Your game folder was not changed. What was already downloaded is kept, so the next try continues where it stopped.";
             }
-            catch (Exception ex) when (ex is InstallException || ex is IOException || ex is UnauthorizedAccessException)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                ProgressTitle = "The update did not complete";
+                // Calm English text for the player; the raw (often localized) exception goes to the log and "Details".
+                var problem = PlayerErrors.ForInstall(ex);
+                ProgressTitle = problem.Kind == ProblemKind.RollbackIncomplete ? "The update stopped" : "The update did not complete";
                 ProgressResultKind = "error";
-                ProgressResult = ex.Message + " If it keeps happening, open Support and send the log.";
-                _svc.Log.Error(ex.Message);
+                ProgressResult = problem.Message;
+                ProgressErrorDetail = problem.Detail;
+                _svc.Log.Error("Install failed: " + problem.Message + " | " + problem.Detail);
+                // "Try again" stays available: the engine re-runs every check (game closed, space, write access) anyway.
+                plan.Issues.RemoveAll(i => i.Severity == IssueSeverity.Blocker);
             }
             finally
             {
@@ -628,6 +739,7 @@ namespace Lotr.Updater.ViewModels
             Busy = true;
             BusyText = "Verifying every file…";
             VerifyRows.Clear();
+            VerifyErrorDetail = null;
             VerifyKind = "checking";
             VerifySummary = "Checking every file…";
             var status = new Progress<string>(s => VerifySummary = s);
@@ -641,17 +753,20 @@ namespace Lotr.Updater.ViewModels
                     : $"{r.Ok} of {r.Checked} files are correct. {r.Missing.Count} missing, {r.Modified.Count} different. \"Repair\" shows exactly what it will fix before doing anything.";
                 foreach (var x in r.Missing.Take(200)) VerifyRows.Add(new IssueRow { Severity = "missing", Text = x });
                 foreach (var x in r.Modified.Take(200)) VerifyRows.Add(new IssueRow { Severity = "different", Text = x });
-                foreach (var x in r.Extra.Take(200)) VerifyRows.Add(new IssueRow { Severity = "extra", Text = x + "  (not part of the release; Repair removes it, with a backup)" });
+                foreach (var x in r.Extra.Take(200)) VerifyRows.Add(new IssueRow { Severity = "extra", Text = x + "  (not part of the release; the updater leaves it as it is)" });
                 foreach (var d in r.Duplicates)
                     VerifyRows.Add(d.IsWorkshop
                         ? new IssueRow { Severity = "info", Text = d.Advice, LinkUrl = d.WorkshopPageUrl, LinkText = d.WorkshopPageUrl != null ? "Open the Workshop page" : null } // Workshop subscription: the game uses Modules
                         : new IssueRow { Severity = "duplicate", Text = d.Id + " is also in " + d.Path + " (" + d.Where + "). Tick only one copy in the launcher, or remove the other one." });
                 if (r.MarkOfTheWebCleared > 0) VerifyRows.Add(new IssueRow { Severity = "fixed", Text = $"Removed the \"downloaded from the internet\" mark from {Plural(r.MarkOfTheWebCleared, "file")} (Windows can refuse to load a mod DLL that carries it)." });
             }
-            catch (Exception ex) when (ex is InstallException || ex is IOException || ex is Core.Net.HttpFetchException || ex is UnauthorizedAccessException)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
+                var problem = PlayerErrors.ForVerify(ex);
                 VerifyKind = "error";
-                VerifySummary = ex.Message;
+                VerifySummary = problem.Message;
+                VerifyErrorDetail = problem.Detail;
+                _svc.Log.Error("Verify failed: " + problem.Detail);
             }
             finally { Busy = false; BusyText = null; }
         }
@@ -667,8 +782,31 @@ namespace Lotr.Updater.ViewModels
         private void RefreshSupportLog()
         {
             try { SupportLog = _svc.BuildSupportLog(); }
-            catch (Exception ex) { SupportLog = "(could not build the log: " + ex.Message + ")"; }
+            catch (Exception ex) { SupportLog = "(could not build the log: " + PlayerErrors.Technical(ex) + ")"; }
         }
+
+        // --- error reports (begin): every error box offers "Send a report to the team" -> this page, nothing sent yet ---
+        private string _supportContext;
+        /// <summary>The problem being reported (shown at the top of the Support page), null when opened from the menu.</summary>
+        public string SupportContext { get => _supportContext; set => Set(ref _supportContext, value); }
+        private string _progressErrorDetail;
+        public string ProgressErrorDetail { get => _progressErrorDetail; set => Set(ref _progressErrorDetail, value); }
+        private string _statusErrorDetail;
+        public string StatusErrorDetail { get => _statusErrorDetail; set => Set(ref _statusErrorDetail, value); }
+        private string _verifyErrorDetail;
+        public string VerifyErrorDetail { get => _verifyErrorDetail; set => Set(ref _verifyErrorDetail, value); }
+
+        /// <param name="what">"install" | "check" | "verify": which error box the player clicked from.</param>
+        private void OpenReport(string what)
+        {
+            string text = what == "install" ? ProgressResult : what == "verify" ? VerifySummary : StatusDetail;
+            SupportContext = string.IsNullOrEmpty(text) ? null : "About this problem: " + text;
+            SupportCode = null;
+            SupportStatus = null;
+            _svc.Log.Info("The player opened a report about: " + (text ?? what));
+            Page = Page.Support; // refreshes the log shown below (exactly what will be sent)
+        }
+        // --- error reports (end) ---
 
         public async Task SendSupportAsync()
         {
@@ -684,9 +822,10 @@ namespace Lotr.Updater.ViewModels
                 SupportStatus = "Valid for one use" + (DateTime.TryParse(code.ExpiresAt, null, DateTimeStyles.RoundtripKind, out exp) ? ", until " + exp.ToLocalTime().ToString("ddd d MMM HH:mm", CultureInfo.GetCultureInfo("en-GB")) : "") + ".";
                 _svc.Log.Info("Support log sent, code " + code.Code);
             }
-            catch (Exception ex) when (ex is Core.Net.HttpFetchException || ex is System.Net.Http.HttpRequestException || ex is FormatException)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                SupportStatus = ex.Message + " You can also press \"Copy log\" and paste it in your ticket.";
+                _svc.Log.Warn("Support upload failed: " + PlayerErrors.Technical(ex));
+                SupportStatus = PlayerErrors.ForSupport(ex).Message;
             }
             finally { Busy = false; }
         }
@@ -782,6 +921,9 @@ namespace Lotr.Updater.ViewModels
             Folders.Add(new Fact("Registry", "HKCU\\" + SelfInstall.UninstallKey + "  (only the \"Installed apps\" entry)"));
             Folders.Add(new Fact("Start menu", "one shortcut: " + SelfInstall.DisplayName));
             Folders.Add(new Fact("Startup (optional)", "only if you tick \"Start with Windows\" in Settings: one shortcut " + _startup.ShortcutPath + " (no registry Run key, no scheduled task, no service)"));
+            Folders.Add(new Fact("Launcher mod list (optional)", "only when you press \"Tick the mods for me\" on Home, or tick \"Tick the mods automatically after each update\" in Settings: "
+                + (LauncherFilePath ?? "Documents\\Mount and Blade II Bannerlord\\Configs\\LauncherData.xml")
+                + ". Only the Multiplayer list changes (our modules ticked, in the right order); a dated copy of the previous file is kept next to it, and Undo puts it back."));
             if (_svc.Verifier.TrustedFingerprints.Count == 0) Fingerprints.Add("No release key embedded yet (placeholder): every release will be refused.");
             foreach (var f in _svc.Verifier.TrustedFingerprints) Fingerprints.Add(f);
         }
@@ -863,5 +1005,182 @@ namespace Lotr.Updater.ViewModels
             }
             catch (Exception ex) { _svc.Log.Warn(ex.Message); }
         }
+
+        #region Launcher mod list (opt-in "Tick the mods for me") and "What's new"
+        // Everything for these two features lives in this region. The launcher's list is only ever changed on a click (or after
+        // an update when the player ticked the Settings option), with a backup next to the file and an Undo link.
+
+        private Core.Game.LauncherSelection _launcherSel;
+        private Core.Game.LauncherSelectionUndo _launcherUndo;
+        private string _launcherMessage;
+        private Core.News.NewsHistory _newsHistory;
+        private RelayCommand _tickLauncherCmd, _undoLauncherCmd, _openNewsCmd;
+
+        /// <summary>Dev runs use a fake Documents folder inside the dev home: the real launcher file is never touched.</summary>
+        private Core.Game.LauncherSelection LauncherSel
+        {
+            get
+            {
+                if (_launcherSel != null) return _launcherSel;
+                var path = IsDev
+                    ? Path.Combine(_svc.Paths.Home, "documents-test", "Mount and Blade II Bannerlord", "Configs", Core.Game.LauncherSelection.FileName)
+                    : Core.Game.LauncherSelection.DefaultPath();
+                if (path == null) return null;
+                return _launcherSel = new Core.Game.LauncherSelection(path, new Core.Game.SystemProcessProbe());
+            }
+        }
+
+        private List<Core.Game.LauncherModule> LauncherMods() => Core.Game.LauncherSelection.ModulesFor(_svc.InstalledManifest);
+
+        // Independent of Busy (a background check or pre-download never touches the launcher file); one launcher action at a time.
+        private bool _launcherWorking;
+        public RelayCommand TickLauncherModsCommand => _tickLauncherCmd ?? (_tickLauncherCmd = new RelayCommand(() => _ = TickLauncherModsAsync(false), () => !_launcherWorking && ShowLauncherCard));
+        public RelayCommand UndoLauncherModsCommand => _undoLauncherCmd ?? (_undoLauncherCmd = new RelayCommand(() => _ = UndoLauncherModsAsync(), () => !_launcherWorking && _launcherUndo != null));
+        public RelayCommand OpenNewsCommand => _openNewsCmd ?? (_openNewsCmd = new RelayCommand(OpenChronicles, () => ChroniclesUrl != null));
+
+        private bool _showLauncherCard;
+        /// <summary>Home card: shown once a release is installed by this app and the game is found.</summary>
+        public bool ShowLauncherCard { get => _showLauncherCard; set => Set(ref _showLauncherCard, value); }
+        private string _launcherStatus;
+        public string LauncherStatus { get => _launcherStatus; set => Set(ref _launcherStatus, value); }
+        private string _launcherStatusKind;
+        /// <summary>ok | warn | error | null</summary>
+        public string LauncherStatusKind { get => _launcherStatusKind; set => Set(ref _launcherStatusKind, value); }
+        private bool _canUndoLauncher;
+        public bool CanUndoLauncher { get => _canUndoLauncher; set => Set(ref _canUndoLauncher, value); }
+        public string LauncherFilePath => LauncherSel?.FilePath;
+
+        /// <summary>Settings, off by default: tick the mods in the launcher after each successful update (same backup + undo).</summary>
+        public bool AutoTickLauncherMods
+        {
+            get => _svc.State.AutoTickLauncherMods;
+            set
+            {
+                if (_svc.State.AutoTickLauncherMods == value) return;
+                _svc.State.AutoTickLauncherMods = value;
+                _svc.SaveState();
+                _svc.Log.Info("Tick the mods in the launcher after each update: " + (value ? "on" : "off"));
+                Raise();
+            }
+        }
+
+        /// <summary>Called from ShowInstalled: read-only look at the launcher's list (never writes).</summary>
+        private void RefreshLauncherCard()
+        {
+            var mods = LauncherMods();
+            ShowLauncherCard = HasGame && mods.Count > 0 && LauncherSel != null;
+            CanUndoLauncher = _launcherUndo != null;
+            if (!ShowLauncherCard) return;
+            if (_launcherMessage != null) { LauncherStatus = _launcherMessage; return; }
+            try
+            {
+                var r = LauncherSel.Inspect(mods);
+                LauncherStatus = r.Message;
+                LauncherStatusKind = r.Outcome == Core.Game.LauncherSelectionOutcome.AlreadyTicked ? "ok" : null;
+            }
+            catch (Exception ex) { LauncherStatus = null; _svc.Log.Detail("Launcher list not readable: " + ex.Message); }
+            CommandRequery();
+        }
+
+        private void ShowLauncherResult(Core.Game.LauncherSelectionResult r)
+        {
+            _launcherMessage = r.Message;
+            LauncherStatus = r.Message;
+            LauncherStatusKind = r.Ok ? (r.OtherLotREntries.Count > 0 ? "warn" : "ok") : r.Outcome == Core.Game.LauncherSelectionOutcome.Failed ? "error" : "warn";
+            CanUndoLauncher = _launcherUndo != null;
+            CommandRequery();
+        }
+
+        /// <summary>The click (or, with <paramref name="automatic"/>, the opt-in after an update). Returns the sentence shown.</summary>
+        private async Task<string> TickLauncherModsAsync(bool automatic)
+        {
+            var sel = LauncherSel;
+            var mods = LauncherMods();
+            if (sel == null || mods.Count == 0 || _launcherWorking) return null;
+            Core.Game.LauncherSelectionResult r;
+            _launcherWorking = true;
+            CommandRequery();
+            try { r = await Task.Run(() => sel.Apply(mods)); }
+            catch (Exception ex)
+            {
+                r = new Core.Game.LauncherSelectionResult { Outcome = Core.Game.LauncherSelectionOutcome.Failed, Message = "Could not change the launcher's mod list (" + ex.Message + "). Tick the mods yourself in its Multiplayer tab." };
+            }
+            finally { _launcherWorking = false; }
+            if (r.Outcome == Core.Game.LauncherSelectionOutcome.Changed) _launcherUndo = r.Undo;
+            _svc.Log.Info((automatic ? "Automatic launcher tick (Settings option): " : "Launcher tick: ") + r.Message + " [" + sel.FilePath + "]");
+            ShowLauncherResult(r);
+            return r.Message;
+        }
+
+        private async Task UndoLauncherModsAsync()
+        {
+            var sel = LauncherSel;
+            var undo = _launcherUndo;
+            if (sel == null || undo == null || _launcherWorking) return;
+            Core.Game.LauncherSelectionResult r;
+            _launcherWorking = true;
+            CommandRequery();
+            try { r = await Task.Run(() => sel.Undo(undo)); }
+            catch (Exception ex) { r = new Core.Game.LauncherSelectionResult { Outcome = Core.Game.LauncherSelectionOutcome.Failed, Message = "Could not undo (" + ex.Message + ")." }; }
+            finally { _launcherWorking = false; }
+            if (r.Outcome == Core.Game.LauncherSelectionOutcome.Changed) _launcherUndo = null;
+            _svc.Log.Info("Launcher tick undo: " + r.Message);
+            ShowLauncherResult(r);
+        }
+
+        /// <summary>Called once after a successful install; does nothing unless the player turned the option on.</summary>
+        private async Task<string> AfterInstallLauncherTickAsync()
+        {
+            if (!_svc.State.AutoTickLauncherMods) return null;
+            return await TickLauncherModsAsync(true);
+        }
+
+        // ---- What's new (notes of the signed manifest; plain text only)
+        private string _newsHeading;
+        public string NewsHeading { get => _newsHeading; set => Set(ref _newsHeading, value); }
+        private string _newsBody;
+        public string NewsBody { get => _newsBody; set => Set(ref _newsBody, value); }
+        private string _newsNote;
+        /// <summary>"Arrives with the update" when the notes belong to a release not installed yet.</summary>
+        public string NewsNote { get => _newsNote; set => Set(ref _newsNote, value); }
+        public ObservableCollection<Core.News.NewsEntry> PreviousNews { get; } = new ObservableCollection<Core.News.NewsEntry>();
+        public string ChroniclesUrl => Core.News.ReleaseNews.ChroniclesUrl(_svc.Config.BaseUrl);
+
+        /// <summary>Called from ShowInstalled: picks the release the player has (or is about to get) and its notes.</summary>
+        private void RefreshNews()
+        {
+            try
+            {
+                if (_newsHistory == null) _newsHistory = new Core.News.NewsHistory(Core.News.NewsHistory.DefaultFile(_svc.Paths));
+                var installed = _svc.InstalledManifest;
+                var offered = _latest != null && _latest.Error == null ? _latest.Manifest : null;
+                bool changed = false;
+                // Both were signature-checked when fetched (installed-manifest.json is only written after that check).
+                if (installed != null) changed |= _newsHistory.Record(Core.News.ReleaseNews.FromManifest(installed));
+                if (offered != null) changed |= _newsHistory.Record(Core.News.ReleaseNews.FromManifest(offered));
+                if (changed) _newsHistory.Save();
+
+                var shown = offered ?? installed;
+                var cur = Core.News.ReleaseNews.FromManifest(shown);
+                NewsHeading = Core.News.ReleaseNews.Heading(cur);
+                NewsBody = Core.News.ReleaseNews.Body(cur);
+                NewsNote = cur != null && installed != null && offered != null && offered.ReleaseId != installed.ReleaseId && _latest.Plan != null && _latest.Plan.HasChanges
+                    ? "Arrives with the update (not installed yet)."
+                    : cur != null && installed == null ? "Arrives when you install the mod." : null;
+                PreviousNews.Clear();
+                foreach (var e in _newsHistory.Previous(cur)) PreviousNews.Add(e);
+            }
+            catch (Exception ex) { _svc.Log.Detail("What's new: " + ex.Message); }
+        }
+
+        /// <summary>Opens only the link this app computed from its baked server address, never a URL from server text.</summary>
+        private void OpenChronicles()
+        {
+            var url = ChroniclesUrl;
+            if (url == null) return;
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose(); }
+            catch (Exception ex) { _svc.Log.Warn(ex.Message); }
+        }
+        #endregion
     }
 }
