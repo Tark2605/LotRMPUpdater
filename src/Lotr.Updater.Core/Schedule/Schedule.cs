@@ -1,13 +1,26 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Lotr.Updater.Core.Model;
 
 namespace Lotr.Updater.Core.Schedule
 {
-    /// <summary>The weekly event: Tuesday 20:30, Paris time (handles summer/winter time).</summary>
+    /// <summary>One battle night as the site lists it in /hub.json (schedule.musters), in UTC.</summary>
+    public sealed class Muster
+    {
+        public DateTime StartUtc { get; set; }
+        public DateTime EndUtc { get; set; }
+    }
+
+    /// <summary>
+    /// The weekly event. Since 0.3.2 the battle nights come from the site (/hub.json, set in its admin panel: day, time,
+    /// skipped and extra nights); without them, the fallback rule below: Tuesday 20:00, Paris time (handles summer/winter
+    /// time; 20:30 until 1 Nov 2026).
+    /// </summary>
     public static class EventSchedule
     {
         public static readonly DayOfWeek Day = DayOfWeek.Tuesday;
-        public static readonly TimeSpan Start = new TimeSpan(20, 30, 0);
+        public static readonly TimeSpan Start = new TimeSpan(20, 0, 0);
         public static readonly TimeSpan Length = TimeSpan.FromHours(2.5);
 
         public static TimeZoneInfo Paris
@@ -21,7 +34,16 @@ namespace Lotr.Updater.Core.Schedule
             }
         }
 
-        /// <summary>Start of the next battle (or of the one in progress), in UTC.</summary>
+        /// <summary>The next battle (or the one in progress): the first site night not over yet, else the weekly rule.</summary>
+        public static Muster Next(DateTime nowUtc, IReadOnlyList<Muster> site = null)
+        {
+            var m = site?.Where(x => x.EndUtc > nowUtc).OrderBy(x => x.StartUtc).FirstOrDefault();
+            if (m != null) return m;
+            var s = NextStartUtc(nowUtc);
+            return new Muster { StartUtc = s, EndUtc = s + Length };
+        }
+
+        /// <summary>Start of the next battle by the weekly rule (or of the one in progress), in UTC.</summary>
         public static DateTime NextStartUtc(DateTime nowUtc)
         {
             var tz = Paris;
@@ -37,15 +59,15 @@ namespace Lotr.Updater.Core.Schedule
             throw new InvalidOperationException("unreachable");
         }
 
-        public static bool InProgress(DateTime nowUtc)
+        public static bool InProgress(DateTime nowUtc, IReadOnlyList<Muster> site = null)
         {
-            var s = NextStartUtc(nowUtc);
-            return nowUtc >= s && nowUtc < s + Length;
+            var m = Next(nowUtc, site);
+            return nowUtc >= m.StartUtc && nowUtc < m.EndUtc;
         }
 
-        public static string Countdown(DateTime nowUtc)
+        public static string Countdown(DateTime nowUtc, IReadOnlyList<Muster> site = null)
         {
-            var s = NextStartUtc(nowUtc);
+            var s = Next(nowUtc, site).StartUtc;
             if (nowUtc >= s) return "The battle is on right now!";
             var left = s - nowUtc;
             if (left.TotalDays >= 1) return $"{(int)left.TotalDays} d {left.Hours} h {left.Minutes:00} min";

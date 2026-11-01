@@ -262,13 +262,13 @@ namespace Lotr.Updater.ViewModels
         private void UpdateCountdown()
         {
             var now = DateTime.UtcNow;
-            var start = EventSchedule.NextStartUtc(now);
+            var start = EventSchedule.Next(now, _siteMusters).StartUtc;
             var paris = TimeZoneInfo.ConvertTimeFromUtc(start, EventSchedule.Paris);
             var local = start.ToLocalTime();
             var en = CultureInfo.GetCultureInfo("en-GB");
             NextBattle = paris.ToString("dddd d MMMM", en) + " · " + paris.ToString("HH:mm", en) + " Paris time" +
                          (Math.Abs((local - paris).TotalMinutes) > 1 ? " (" + local.ToString("HH:mm", en) + " on your clock)" : "");
-            Countdown = EventSchedule.Countdown(now);
+            Countdown = EventSchedule.Countdown(now, _siteMusters);
             BattleSoon = start - now < TimeSpan.FromHours(6);
         }
 
@@ -364,7 +364,7 @@ namespace Lotr.Updater.ViewModels
                 BusyText = null;
                 // Weekly rhythm: every 2 h, every 20 min on battle day before the start.
                 var now = DateTime.UtcNow;
-                var start = EventSchedule.NextStartUtc(now);
+                var start = EventSchedule.Next(now, _siteMusters).StartUtc;
                 _nextAutoCheckUtc = now.AddMinutes(start - now < TimeSpan.FromHours(12) ? 20 : 120);
             }
             if (_latest?.Plan != null && _latest.Plan.HasChanges && InTray && !_svc.State.PreDownload && _notifiedRelease != _latest.Manifest.ReleaseId)
@@ -1406,18 +1406,26 @@ namespace Lotr.Updater.ViewModels
         // ---- What's new: the site's chronicle for that version (/hub.json, 0.3.1), else the notes of the signed manifest;
         // plain text only either way.
         private List<Core.News.SiteNewsItem> _siteNews;
+        /// <summary>The coming battle nights from /hub.json (0.3.2); null until read, the weekly rule is used meanwhile.</summary>
+        private List<Muster> _siteMusters;
         private bool _siteNewsLoading;
 
-        /// <summary>After each successful check: reads the site's patch notes in the background, then refreshes the cards.
-        /// A failure keeps what was there (the previous site notes, or the manifest's).</summary>
+        /// <summary>After each successful check: reads the site's patch notes and battle nights in the background, then
+        /// refreshes the cards and the countdown. A failure keeps what was there (the previous site data, or the manifest's
+        /// notes and the weekly rule).</summary>
         private async Task LoadSiteNewsAsync()
         {
             if (_siteNewsLoading) return;
             _siteNewsLoading = true;
             try
             {
-                var items = await Task.Run(() => _svc.FetchSiteNewsAsync(CancellationToken.None));
-                if (items != null) { _siteNews = items; RefreshNews(); }
+                var hub = await Task.Run(() => _svc.FetchSiteHubAsync(CancellationToken.None));
+                if (hub != null)
+                {
+                    _siteNews = hub.News;
+                    RefreshNews();
+                    if (hub.Musters.Count > 0) { _siteMusters = hub.Musters; UpdateCountdown(); }
+                }
             }
             catch (Exception ex) { _svc.Log.Detail("Site news: " + ex.Message); }
             finally { _siteNewsLoading = false; }

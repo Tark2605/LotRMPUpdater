@@ -1,10 +1,19 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
 using System.Text;
+using Lotr.Updater.Core.Schedule;
 
 namespace Lotr.Updater.Core.News
 {
+    /// <summary>What the updater reads in /hub.json: the chronicles and the coming battle nights.</summary>
+    public sealed class SiteHub
+    {
+        public List<SiteNewsItem> News { get; set; } = new List<SiteNewsItem>();
+        public List<Muster> Musters { get; set; } = new List<Muster>();
+    }
+
     /// <summary>One chronicle of the site, as /hub.json lists it (all fields already plain text on the site side).</summary>
     public sealed class SiteNewsItem
     {
@@ -27,6 +36,40 @@ namespace Lotr.Updater.Core.News
     {
         public const long MaxBytes = 512 * 1024;
         public const int MaxItems = 20;
+        public const int MaxMusters = 20;
+
+        /// <summary>The "news" and "schedule.musters" lists of /hub.json (schema 1); empty lists for anything else. Never throws.</summary>
+        public static SiteHub ParseHub(byte[] json)
+        {
+            var hub = new SiteHub { News = Parse(json) };
+            if (json == null || json.Length == 0 || json.Length > MaxBytes) return hub;
+            try
+            {
+                var o = Json.Json.ParseObject(Encoding.UTF8.GetString(json));
+                if (o.Str("schema") != "1") return hub;
+                var schedule = o.Obj("schedule");
+                if (schedule == null) return hub;
+                foreach (var x in schedule.Objs("musters"))
+                {
+                    if (!Instant(x.Str("start"), out var s) || !Instant(x.Str("end"), out var e)) continue;
+                    // A battle night lasts minutes to hours: anything else is a typo on the site, not a night to show.
+                    if (e <= s || e - s > TimeSpan.FromHours(12)) continue;
+                    hub.Musters.Add(new Muster { StartUtc = s, EndUtc = e });
+                    if (hub.Musters.Count >= MaxMusters) break;
+                }
+            }
+            catch (Exception) { hub.Musters.Clear(); }
+            return hub;
+        }
+
+        private static bool Instant(string s, out DateTime utc)
+        {
+            utc = default(DateTime);
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            if (!DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d)) return false;
+            utc = DateTime.SpecifyKind(d, DateTimeKind.Utc);
+            return true;
+        }
 
         /// <summary>The "news" list of /hub.json (schema 1); empty for anything else. Never throws.</summary>
         public static List<SiteNewsItem> Parse(byte[] json)

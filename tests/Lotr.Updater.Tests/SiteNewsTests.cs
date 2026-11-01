@@ -100,6 +100,45 @@ namespace Lotr.Updater.Tests
             Assert.Empty(SiteNews.Parse(B(big)));
         }
 
+        // schedule.musters as the site writes them (site/src/lib/schedule.ts upcomingMusters), plus entries it must ignore.
+        private const string HubWithMusters = @"{
+  ""schema"": 1,
+  ""schedule"": { ""confirmed"": true, ""musters"": [
+    { ""start"": ""2026-11-10T19:00:00.000Z"", ""end"": ""2026-11-10T21:30:00.000Z"" },
+    { ""start"": ""2026-11-03T19:00:00.000Z"", ""end"": ""2026-11-03T21:30:00.000Z"", ""map"": ""scn_HD_MP9"" },
+    { ""start"": ""not a date"", ""end"": ""2026-11-03T21:30:00.000Z"" },
+    { ""start"": ""2026-11-05T19:00:00.000Z"", ""end"": ""2026-11-05T18:00:00.000Z"" },
+    { ""start"": ""2026-11-06T19:00:00.000Z"", ""end"": ""2026-11-08T19:00:00.000Z"" }
+  ] },
+  ""news"": []
+}";
+
+        [Fact]
+        public void Battle_nights_come_from_the_site_and_bad_entries_are_dropped()
+        {
+            var hub = SiteNews.ParseHub(B(HubWithMusters));
+            Assert.Equal(2, hub.Musters.Count);
+            Assert.All(hub.Musters, m => Assert.Equal(DateTimeKind.Utc, m.StartUtc.Kind));
+
+            var now = new DateTime(2026, 11, 1, 16, 0, 0, DateTimeKind.Utc);
+            var next = Lotr.Updater.Core.Schedule.EventSchedule.Next(now, hub.Musters);
+            Assert.Equal(new DateTime(2026, 11, 3, 19, 0, 0, DateTimeKind.Utc), next.StartUtc); // earliest, not the first listed
+            // During the night it stays the current one; after it, the next site night.
+            Assert.True(Lotr.Updater.Core.Schedule.EventSchedule.InProgress(new DateTime(2026, 11, 3, 20, 0, 0, DateTimeKind.Utc), hub.Musters));
+            Assert.Equal(new DateTime(2026, 11, 10, 19, 0, 0, DateTimeKind.Utc), Lotr.Updater.Core.Schedule.EventSchedule.Next(new DateTime(2026, 11, 3, 22, 0, 0, DateTimeKind.Utc), hub.Musters).StartUtc);
+        }
+
+        [Fact]
+        public void Without_site_nights_the_weekly_rule_is_used()
+        {
+            var after = new DateTime(2026, 11, 20, 12, 0, 0, DateTimeKind.Utc); // every site night is over
+            var hub = SiteNews.ParseHub(B(HubWithMusters));
+            Assert.Equal(new DateTime(2026, 11, 24, 19, 0, 0, DateTimeKind.Utc), Lotr.Updater.Core.Schedule.EventSchedule.Next(after, hub.Musters).StartUtc);
+            Assert.Empty(SiteNews.ParseHub(B(Hub)).Musters); // no schedule block
+            Assert.Empty(SiteNews.ParseHub(B("{\"schema\":2,\"schedule\":{\"musters\":[{\"start\":\"2026-11-03T19:00:00Z\",\"end\":\"2026-11-03T21:00:00Z\"}]}}")).Musters);
+            Assert.Equal(new DateTime(2026, 11, 3, 19, 0, 0, DateTimeKind.Utc), Lotr.Updater.Core.Schedule.EventSchedule.Next(new DateTime(2026, 11, 1, 16, 0, 0, DateTimeKind.Utc)).StartUtc);
+        }
+
         [Fact]
         public async Task Service_reads_hub_json_from_the_server_and_survives_its_absence()
         {

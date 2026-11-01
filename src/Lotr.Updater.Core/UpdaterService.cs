@@ -193,16 +193,20 @@ namespace Lotr.Updater.Core
 
         /// <summary>The site's patch notes (/hub.json). Display only, short retries: a missing or unreachable site just leaves
         /// the notes of the signed manifest on screen. Null when it could not be read.</summary>
-        public async Task<List<News.SiteNewsItem>> FetchSiteNewsAsync(CancellationToken ct)
+        public async Task<List<News.SiteNewsItem>> FetchSiteNewsAsync(CancellationToken ct) => (await FetchSiteHubAsync(ct).ConfigureAwait(false))?.News;
+
+        /// <summary>/hub.json as a whole: the patch notes and the coming battle nights (0.3.2). Same rules: display only,
+        /// null when it could not be read.</summary>
+        public async Task<News.SiteHub> FetchSiteHubAsync(CancellationToken ct)
         {
             try
             {
                 var quick = new HttpFetcher(Fetcher.Client, Fs, null, new RetryPolicy { MaxAttempts = 2 });
                 var b = await quick.GetBytesAsync(Endpoints.SiteNews, ct, allowNotFound: true, maxBytes: News.SiteNews.MaxBytes).ConfigureAwait(false);
                 if (b == null) { Log.Detail("No site news (" + Endpoints.SiteNews.AbsolutePath + " not found)."); return null; }
-                var items = News.SiteNews.Parse(b);
-                Log.Detail("Site news: " + items.Count + " chronicle(s).");
-                return items;
+                var hub = News.SiteNews.ParseHub(b);
+                Log.Detail("Site news: " + hub.News.Count + " chronicle(s), " + hub.Musters.Count + " battle night(s).");
+                return hub;
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {

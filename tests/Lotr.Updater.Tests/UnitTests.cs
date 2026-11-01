@@ -101,11 +101,11 @@ namespace Lotr.Updater.Tests
         }
 
         [Theory]
-        [InlineData("2026-10-15T12:00:00Z", "2026-10-20T18:30:00Z")] // Thursday (summer time CEST, UTC+2) -> next Tuesday
-        [InlineData("2026-10-27T19:00:00Z", "2026-10-27T19:30:00Z")] // Tuesday after the switch to winter time (UTC+1)
-        [InlineData("2026-10-27T20:00:00Z", "2026-10-27T19:30:00Z")] // battle in progress
-        [InlineData("2026-10-27T23:00:00Z", "2026-11-03T19:30:00Z")] // after the battle
-        public void Next_battle_is_tuesday_2030_paris(string now, string expected)
+        [InlineData("2026-10-15T12:00:00Z", "2026-10-20T18:00:00Z")] // Thursday (summer time CEST, UTC+2) -> next Tuesday
+        [InlineData("2026-10-27T18:30:00Z", "2026-10-27T19:00:00Z")] // Tuesday after the switch to winter time (UTC+1)
+        [InlineData("2026-10-27T20:00:00Z", "2026-10-27T19:00:00Z")] // battle in progress
+        [InlineData("2026-10-27T23:00:00Z", "2026-11-03T19:00:00Z")] // after the battle
+        public void Next_battle_is_tuesday_2000_paris(string now, string expected)
         {
             var n = DateTime.Parse(now, null, System.Globalization.DateTimeStyles.AdjustToUniversal);
             var e = DateTime.Parse(expected, null, System.Globalization.DateTimeStyles.AdjustToUniversal);
