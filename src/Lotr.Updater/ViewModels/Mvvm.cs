@@ -78,5 +78,5 @@ namespace Lotr.Updater.ViewModels
             value is bool b && b ? Enum.Parse(typeof(Page), System.Convert.ToString(parameter)) : Binding.DoNothing;
     }
 
-    public enum Page { Home, Plan, Progress, Verify, Support, Settings, About }
+    public enum Page { Home, Plan, Progress, Verify, Support, Settings, About, News }
 }

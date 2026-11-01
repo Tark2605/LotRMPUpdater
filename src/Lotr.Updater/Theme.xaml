@@ -356,4 +356,157 @@
         <Setter Property="Foreground" Value="{StaticResource Parchment}"/>
         <Setter Property="BorderBrush" Value="{StaticResource GoldDeep}"/>
     </Style>
+
+    <!-- ============================== launcher look (0.3.0) ============================== -->
+    <SolidColorBrush x:Key="Seam" Color="#3D3326"/>
+    <LinearGradientBrush x:Key="BannerFill" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#2A2117" Offset="0"/>
+        <GradientStop Color="#1A150F" Offset="0.6"/>
+        <GradientStop Color="#120F0B" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="BannerTop" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#A9843E" Offset="0"/>
+        <GradientStop Color="#F0D48A" Offset="0.5"/>
+        <GradientStop Color="#A9843E" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="TopRule" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#99C9A45C" Offset="0"/>
+        <GradientStop Color="#00C9A45C" Offset="1"/>
+    </LinearGradientBrush>
+    <RadialGradientBrush x:Key="SealRed" GradientOrigin="0.38,0.3" Center="0.45,0.4" RadiusX="0.7" RadiusY="0.7">
+        <GradientStop Color="#E9875E" Offset="0"/>
+        <GradientStop Color="#C4532A" Offset="0.5"/>
+        <GradientStop Color="#7E2C12" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="SealGold" GradientOrigin="0.38,0.3" Center="0.45,0.4" RadiusX="0.7" RadiusY="0.7">
+        <GradientStop Color="#FAE6AE" Offset="0"/>
+        <GradientStop Color="#D9B465" Offset="0.5"/>
+        <GradientStop Color="#9C7634" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="SealDark" GradientOrigin="0.4,0.3" Center="0.5,0.45" RadiusX="0.7" RadiusY="0.7">
+        <GradientStop Color="#2E261B" Offset="0"/>
+        <GradientStop Color="#16120D" Offset="1"/>
+    </RadialGradientBrush>
+
+    <!-- Top navigation: plain words, the current page in bright gold with a thin rule under it -->
+    <Style x:Key="TopNav" TargetType="RadioButton">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{StaticResource Ash}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Margin" Value="6,0,0,0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="b" Background="Transparent" Padding="12,8,12,6" BorderThickness="0,0,0,1" BorderBrush="Transparent">
+                        <ContentPresenter VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{StaticResource Gold}"/></Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="b" Property="Background" Value="#14C9A45C"/></Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource GoldBright}"/>
+                            <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Gold}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Small caps label on the Home screen (eyebrow, "NEXT EVENT", ...) -->
+    <Style x:Key="Eyebrow" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource Gold}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <!-- Status pill of a module row on the banner -->
+    <Style x:Key="Pill" TargetType="Border">
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="6,2,6,3"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="BorderBrush" Value="#7A6232"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding PillKind}" Value="ok"><Setter Property="BorderBrush" Value="#4F6A45"/></DataTrigger>
+            <DataTrigger Binding="{Binding PillKind}" Value="wait"><Setter Property="BorderBrush" Value="{StaticResource Seam}"/></DataTrigger>
+            <DataTrigger Binding="{Binding Pill}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="PillText" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="Foreground" Value="#E6C47A"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding PillKind}" Value="ok"><Setter Property="Foreground" Value="{StaticResource Elven}"/></DataTrigger>
+            <DataTrigger Binding="{Binding PillKind}" Value="wait"><Setter Property="Foreground" Value="{StaticResource Ash}"/></DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The round "seal" button on Home: red to update, gold to play, dark while it waits. Its DataContext is the window's. -->
+    <Style x:Key="SealButton" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Foreground" Value="#FFF1E2"/>
+        <Setter Property="Background" Value="{StaticResource SealRed}"/>
+        <Setter Property="BorderBrush" Value="#66FFE7CF"/>
+        <Setter Property="Width" Value="128"/>
+        <Setter Property="Height" Value="128"/>
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+        <Setter Property="RenderTransform"><Setter.Value><ScaleTransform/></Setter.Value></Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Ellipse x:Name="disc" Fill="{TemplateBinding Background}">
+                            <Ellipse.Effect><DropShadowEffect BlurRadius="26" ShadowDepth="8" Direction="270" Opacity="0.65" Color="#000000"/></Ellipse.Effect>
+                        </Ellipse>
+                        <Ellipse x:Name="ring" Margin="9" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="1" StrokeDashArray="3 3"/>
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="ring" Property="StrokeThickness" Value="2"/></Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter Property="Cursor" Value="Arrow"/></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding SealKind}" Value="play">
+                <Setter Property="Background" Value="{StaticResource SealGold}"/>
+                <Setter Property="Foreground" Value="#2A1A06"/>
+                <Setter Property="BorderBrush" Value="#80FFF6DC"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SealKind}" Value="wait">
+                <Setter Property="Background" Value="{StaticResource SealDark}"/>
+                <Setter Property="Foreground" Value="{StaticResource GoldBright}"/>
+                <Setter Property="BorderBrush" Value="#807A5A22"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SealKind}" Value="locate">
+                <Setter Property="Background" Value="{StaticResource SealDark}"/>
+                <Setter Property="Foreground" Value="{StaticResource GoldBright}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Gold}"/>
+            </DataTrigger>
+            <MultiTrigger>
+                <MultiTrigger.Conditions>
+                    <Condition Property="IsMouseOver" Value="True"/>
+                    <Condition Property="IsEnabled" Value="True"/>
+                </MultiTrigger.Conditions>
+                <MultiTrigger.EnterActions>
+                    <BeginStoryboard><Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1.04" Duration="0:0:0.15"/>
+                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1.04" Duration="0:0:0.15"/>
+                    </Storyboard></BeginStoryboard>
+                </MultiTrigger.EnterActions>
+                <MultiTrigger.ExitActions>
+                    <BeginStoryboard><Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.2"/>
+                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.2"/>
+                    </Storyboard></BeginStoryboard>
+                </MultiTrigger.ExitActions>
+            </MultiTrigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

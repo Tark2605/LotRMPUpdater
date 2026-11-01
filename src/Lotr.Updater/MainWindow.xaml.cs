@@ -32,7 +32,7 @@ namespace Lotr.Updater
             _vm.RestartRequested += ExitForRestart;
             StartupGuard.UseLog(_vm.Service.Log);
             StartupGuard.Trace("window constructed");
-            SourceInitialized += (s, e) => { StartupGuard.Trace("SourceInitialized"); WindowChrome.UseDarkTitleBar(this); };
+            SourceInitialized += (s, e) => { StartupGuard.Trace("SourceInitialized"); WindowChrome.UseDarkTitleBar(this); FitToScreen(); };
             // First show: if no frame is rendered within a few seconds (GPU driver, overlay), restart in software rendering.
             IsVisibleChanged += (s, e) => { if (IsVisible) StartupGuard.ArmRenderWatchdog(); };
             ContentRendered += (s, e) => StartupGuard.Rendered();
@@ -42,8 +42,30 @@ namespace Lotr.Updater
                 await BeginAsync();
                 if (_options.TourDir != null) await TourAsync(_options.TourDir);
             };
+            SizeChanged += (s, e) => FitBanner();
             Closing += OnClosing;
             Closed += (s, e) => _tray?.Dispose();
+        }
+
+        /// <summary>A small laptop screen at 125-150 % (1366x768) has less room than the default size: never open larger
+        /// than the work area, and let the window shrink to it.</summary>
+        private void FitToScreen()
+        {
+            var wa = SystemParameters.WorkArea;
+            if (wa.Width < 1 || wa.Height < 1) return;
+            MinWidth = Math.Min(MinWidth, wa.Width);
+            MinHeight = Math.Min(MinHeight, wa.Height);
+            if (Width > wa.Width) Width = wa.Width;
+            if (Height > wa.Height) Height = wa.Height;
+        }
+
+        /// <summary>Short window (small laptop screen, 150 %): the banner drops its crest rather than shrinking the module
+        /// names until they cannot be read.</summary>
+        private void FitBanner()
+        {
+            bool shortWindow = ActualHeight < 600;
+            BannerCrest.Visibility = shortWindow ? Visibility.Collapsed : Visibility.Visible;
+            BannerBody.Margin = new Thickness(16, shortWindow ? 16 : 22, 16, 78);
         }
 
         private async Task BeginAsync()
@@ -133,17 +155,31 @@ namespace Lotr.Updater
         {
             Directory.CreateDirectory(dir);
             if (Environment.GetEnvironmentVariable("LOTR_TOUR_FRAMES") == "1") StartFrames(dir);
+            if (Environment.GetEnvironmentVariable("LOTR_TOUR_ONLY") == "home") { await HomeSizesAsync(dir); Close(); return; }
             await Shot(dir, "01-home-update-available");
             _vm.ReviewCommand.Execute(null);
             await Shot(dir, "02-plan");
             var install = _vm.InstallAsync();
-            await Task.Delay(2500);
+            if (Filming) await Task.Delay(2500); // a local install takes about a second: catch it on the way
             await Shot(dir, "03-progress-downloading");
             await install;
             _vm.Page = Page.Progress;
             await Shot(dir, "04-progress-done");
             _vm.Page = Page.Home;
             await Shot(dir, "05-home-ready");
+            double w = Width, h = Height;
+            Width = MinWidth; Height = MinHeight;
+            await Shot(dir, "05a-home-ready-smallest-window");
+            Width = w; Height = h;
+            _vm.Page = Page.News;
+            await Shot(dir, "05b-news");
+            _vm.Page = Page.Home;
+            _vm.TickLauncherModsCommand.Execute(null);
+            await Task.Delay(1500);
+            await Shot(dir, "05c-home-ticked");
+            _vm.UpdaterUpdateText = "A new version of this updater (0.3.1) is ready. It installs itself as soon as nothing is running.";
+            await Shot(dir, "05d-home-updater-banner");
+            _vm.UpdaterUpdateText = null;
 
             // Damage the FAKE install a little so Verify has something to show.
             var g = _vm.Service.Game;
@@ -171,6 +207,31 @@ namespace Lotr.Updater
             await Shot(dir, "10-about");
             _frameTimer?.Stop();
             Close();
+        }
+
+        /// <summary>Dev tour, LOTR_TOUR_ONLY=home: the Home screen as it is (offline, no game, older release...) at the
+        /// default size, on a 1366x768 laptop at 125 % and at 150 %, then Settings.</summary>
+        private async Task HomeSizesAsync(string dir)
+        {
+            await Shot(dir, "home");
+            if (Environment.GetEnvironmentVariable("LOTR_TOUR_CLICK") == "1")
+            {
+                // The round button as a player clicks it; then wait for whatever it started.
+                _vm.SealCommand.Execute(null);
+                await Task.Delay(500);
+                for (int i = 0; i < 120 && _vm.Busy; i++) await Task.Delay(250);
+                await Shot(dir, "after-click");
+                _vm.Page = Page.Home;
+                await Shot(dir, "home-after-click");
+            }
+            MinWidth = 800; MinHeight = 400;
+            Width = 1093; Height = 576;
+            await Shot(dir, "home-1366-125pc");
+            Width = 910; Height = 480;
+            await Shot(dir, "home-1366-150pc");
+            Width = 1060; Height = 700;
+            _vm.Page = Page.Settings;
+            await Shot(dir, "settings");
         }
 
         private async Task Shot(string dir, string name)

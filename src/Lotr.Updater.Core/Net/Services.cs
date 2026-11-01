@@ -48,6 +48,8 @@ namespace Lotr.Updater.Core.Net
         public Uri Security(string releaseId) => new Uri(Base, FilesPath + releaseId + "/security.json");
         public Uri Support => new Uri(Base, SupportPath);
         public Uri UpdaterLatest => new Uri(Base, "files/updater/latest.json");
+        /// <summary>The site's news feed (its Chronicles as plain text): the patch notes shown on Play and News.</summary>
+        public Uri SiteNews => new Uri(Base, "hub.json");
 
         public string[] Describe() => new[]
         {
@@ -58,6 +60,7 @@ namespace Lotr.Updater.Core.Net
             "POST " + QueueSlot + " , /heartbeat , /release  (only for the big Core download: a place in the download queue)",
             "POST " + Support + "  (only when you press \"Send to support\")",
             "GET  " + UpdaterLatest + "  (is there a newer updater)",
+            "GET  " + SiteNews + "  (the patch notes shown on Play and News: text from the site's Chronicles)",
         };
     }
 

@@ -25,6 +25,8 @@
     <Reference Include="System.Net.Http" />
     <Resource Include="Resources\app.ico" />
     <Resource Include="Resources\app-256.png" />
+    <Resource Include="Resources\wordmark.png" />
+    <Resource Include="Resources\crest.png" />
     <Resource Include="Resources\Fonts\*.ttf" />
     <EmbeddedResource Include="Resources\Fonts\OFL.txt" LogicalName="licences.OFL.txt" />
   </ItemGroup>

@@ -16,7 +16,7 @@ namespace Lotr.Updater.DevServer
     /// Dev helper for the end-to-end run against releases made by the REAL publish tool (tools/LotR.Publish):
     ///   fakegame &lt;dir&gt;                              a fake Bannerlord folder (never the real game)
     ///   fakecore &lt;dir&gt; &lt;1|2&gt;                         a fake LotRMPCore module (24 MiB pack, variant 2 = a 3 MiB region changed)
-    ///   serve &lt;filesRoot&gt; [port] [KB/s]               serves &lt;filesRoot&gt; at http://localhost:port/files/ (+ /api stubs)
+    ///   serve &lt;filesRoot&gt; [port] [KB/s]               serves &lt;filesRoot&gt; at http://localhost:port/files/ (+ /api stubs, /hub.json = &lt;filesRoot&gt;\site\hub.json)
     ///   install &lt;game&gt; &lt;baseUrl&gt; &lt;home&gt; &lt;pub.pem&gt;   headless check + install + verify through the engine
     /// Everything lives in temp folders. Never the real game, never a real server, never a real signing key.
     /// </summary>

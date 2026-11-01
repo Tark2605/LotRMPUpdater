@@ -24,7 +24,7 @@ param(
     [string]$EventModule = '',
     [string]$Caddy = (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe'),
     [string]$Node = 'node',
-    [string]$NextVersion = '0.1.1',
+    [string]$NextVersion = '',   # default: the version in Directory.Build.props with its last number + 1
     [string]$WorkRoot = $env:TEMP,
     [switch]$SkipBuild,
     [switch]$Keep
@@ -34,6 +34,10 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = (Resolve-Path (Join-Path $here '..\..')).Path
+if (-not $NextVersion) {
+    $cur = [version]([xml](Get-Content (Join-Path $repo 'Directory.Build.props') -Raw)).Project.PropertyGroup.Version
+    $NextVersion = '{0}.{1}.{2}' -f $cur.Major, $cur.Minor, ([Math]::Max($cur.Build, 0) + 1)
+}
 if (-not $EventModule) { $EventModule = Join-Path $repo '..\colleague\github-LotRMPEvent\LotRMPEvent' }
 $EventModule = (Resolve-Path $EventModule).Path
 $T = Join-Path $WorkRoot ('lotr-rehearsal-' + [guid]::NewGuid().ToString('N').Substring(0, 8))

@@ -191,6 +191,26 @@ namespace Lotr.Updater.Core
             }
         }
 
+        /// <summary>The site's patch notes (/hub.json). Display only, short retries: a missing or unreachable site just leaves
+        /// the notes of the signed manifest on screen. Null when it could not be read.</summary>
+        public async Task<List<News.SiteNewsItem>> FetchSiteNewsAsync(CancellationToken ct)
+        {
+            try
+            {
+                var quick = new HttpFetcher(Fetcher.Client, Fs, null, new RetryPolicy { MaxAttempts = 2 });
+                var b = await quick.GetBytesAsync(Endpoints.SiteNews, ct, allowNotFound: true, maxBytes: News.SiteNews.MaxBytes).ConfigureAwait(false);
+                if (b == null) { Log.Detail("No site news (" + Endpoints.SiteNews.AbsolutePath + " not found)."); return null; }
+                var items = News.SiteNews.Parse(b);
+                Log.Detail("Site news: " + items.Count + " chronicle(s).");
+                return items;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Log.Detail("No site news: " + ex.Message);
+                return null;
+            }
+        }
+
         /// <summary>Checks the channel, verifies the signature, compares with the disk. Changes nothing in the game folder.</summary>
         public async Task<CheckResult> CheckAsync(IProgress<string> status, CancellationToken ct)
         {

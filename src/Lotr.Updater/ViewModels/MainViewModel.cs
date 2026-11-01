@@ -52,6 +52,33 @@ namespace Lotr.Updater.ViewModels
         public string Value { get; }
     }
 
+    /// <summary>One module on the Home banner: name, version (old → new when it changes) and its status pill.</summary>
+    public sealed class BannerModuleRow
+    {
+        public string Name { get; set; }
+        public string Version { get; set; }
+        public string Pill { get; set; }
+        /// <summary>ok | up | wait</summary>
+        public string PillKind { get; set; }
+    }
+
+    /// <summary>One station of the road on Home (Download, Verify, Install, Ready).</summary>
+    public sealed class StationRow : ObservableObject
+    {
+        public string Label { get; set; }
+        public bool ShowLeft { get; set; }
+        public bool ShowRight { get; set; }
+        private string _state = "todo";
+        /// <summary>todo | active | done</summary>
+        public string State { get => _state; set => Set(ref _state, value); }
+        private string _note;
+        public string Note { get => _note; set => Set(ref _note, value); }
+        private bool _leftLit;
+        public bool LeftLit { get => _leftLit; set => Set(ref _leftLit, value); }
+        private bool _rightLit;
+        public bool RightLit { get => _rightLit; set => Set(ref _rightLit, value); }
+    }
+
     public sealed class IssueRow
     {
         public string Text { get; set; }
@@ -153,7 +180,7 @@ namespace Lotr.Updater.ViewModels
         public string DevBanner => IsDev ? "DEV MODE — local test server " + _options.Server + " · fake game " + _options.Game : null;
 
         private bool _busy;
-        public bool Busy { get => _busy; set { if (Set(ref _busy, value)) CommandRequery(); } }
+        public bool Busy { get => _busy; set { if (Set(ref _busy, value)) { CommandRequery(); RefreshLook(); } } }
         private string _busyText;
         public string BusyText { get => _busyText; set => Set(ref _busyText, value); }
 
@@ -195,16 +222,16 @@ namespace Lotr.Updater.ViewModels
         private string _gamePath;
         public string GamePath { get => _gamePath; set => Set(ref _gamePath, value); }
         private string _gameNote;
-        public string GameNote { get => _gameNote; set => Set(ref _gameNote, value); }
+        public string GameNote { get => _gameNote; set { if (Set(ref _gameNote, value)) RefreshLook(); } }
 
         // ------------------------------------------------------------ home: mod status
         private string _statusKind = "checking";
         /// <summary>checking | ok | update | missing | error</summary>
-        public string StatusKind { get => _statusKind; set => Set(ref _statusKind, value); }
+        public string StatusKind { get => _statusKind; set { if (Set(ref _statusKind, value)) RefreshLook(); } }
         private string _statusTitle = "Checking…";
-        public string StatusTitle { get => _statusTitle; set => Set(ref _statusTitle, value); }
+        public string StatusTitle { get => _statusTitle; set { if (Set(ref _statusTitle, value)) RefreshLook(); } }
         private string _statusDetail;
-        public string StatusDetail { get => _statusDetail; set => Set(ref _statusDetail, value); }
+        public string StatusDetail { get => _statusDetail; set { if (Set(ref _statusDetail, value)) RefreshLook(); } }
         private string _releaseNotes;
         public string ReleaseNotes { get => _releaseNotes; set => Set(ref _releaseNotes, value); }
         private string _signatureText;
@@ -296,10 +323,15 @@ namespace Lotr.Updater.ViewModels
             if (m != null)
                 foreach (var x in m.Modules)
                     Modules.Add(new ModuleRow { Name = x.DisplayName(), Version = x.Version, Detail = "Modules\\" + x.Folder + " · " + Units.Bytes(x.TotalSize) });
-            var tick = _svc.ModulesToTick(_latest?.Manifest ?? m);
-            TickHint = tick.Count == 0 ? null : "In the launcher's Multiplayer tab, tick " + Join(tick) + " (or let this app do it for you below: it changes the launcher's list only when you ask).";
+            // Named in the launcher's load order (Core first), as the player sees them there.
+            var shown = _latest?.Manifest ?? m;
+            var tick = shown == null ? new List<string>()
+                : shown.Modules.Where(x => !string.Equals(x.Role, ModuleRoles.AdminClient, StringComparison.Ordinal))
+                               .OrderBy(x => x.IsCore() ? 0 : 1).Select(x => x.DisplayName()).ToList();
+            TickHint = tick.Count == 0 ? null : "In the Bannerlord launcher's Multiplayer tab, tick " + Join(tick) + " (or click \"Tick them in the launcher for me\" on Play: it changes the launcher's list only when you ask).";
             RefreshLauncherCard();
             RefreshNews();
+            RefreshLook();
         }
 
         private static string Plural(int n, string word) => n + " " + word + (n == 1 ? "" : "s");
@@ -322,6 +354,7 @@ namespace Lotr.Updater.ViewModels
             {
                 _latest = await Task.Run(() => _svc.CheckAsync(status, CancellationToken.None));
                 ApplyCheck(_latest);
+                if (_latest.Error == null) _ = LoadSiteNewsAsync();
                 if (_latest.Error == null && _latest.Plan.HasChanges && !userAsked)
                     await PreDownloadAsync();
             }
@@ -623,7 +656,7 @@ namespace Lotr.Updater.ViewModels
 
         // ------------------------------------------------------------ progress
         private double _progress;
-        public double ProgressValue { get => _progress; set => Set(ref _progress, value); }
+        public double ProgressValue { get => _progress; set { if (Set(ref _progress, value)) RefreshLook(); } }
         private string _progressTitle = "Nothing running";
         public string ProgressTitle { get => _progressTitle; set => Set(ref _progressTitle, value); }
         private string _progressDetail;
@@ -655,7 +688,9 @@ namespace Lotr.Updater.ViewModels
         {
             var plan = _shownPlan;
             if (plan == null || Busy) return;
-            Page = Page.Progress;
+            _installStage = 0;
+            _installing = true;
+            Page = Page.Home; // the road on Home shows the progress; "Show details" opens the live log
             Busy = true;
             BusyText = "Installing…";
             ProgressResult = null;
@@ -694,11 +729,13 @@ namespace Lotr.Updater.ViewModels
                 ProgressResult = problem.Message;
                 ProgressErrorDetail = problem.Detail;
                 _svc.Log.Error("Install failed: " + problem.Message + " | " + problem.Detail);
+                Page = Page.Progress; // the calm message, "Send a report" and "Try again" live there
                 // "Try again" stays available: the engine re-runs every check (game closed, space, write access) anyway.
                 plan.Issues.RemoveAll(i => i.Severity == IssueSeverity.Blocker);
             }
             finally
             {
+                _installing = false;
                 Busy = false;
                 BusyText = null;
                 _cts = null;
@@ -708,6 +745,8 @@ namespace Lotr.Updater.ViewModels
 
         private void OnProgress(EngineProgress e)
         {
+            _installStage = e.Phase == EnginePhase.Queue || e.Phase == EnginePhase.Downloading ? 0
+                          : e.Phase == EnginePhase.Preparing ? 1 : e.Phase == EnginePhase.Done ? 3 : 2;
             ProgressValue = e.Fraction;
             switch (e.Phase)
             {
@@ -921,7 +960,7 @@ namespace Lotr.Updater.ViewModels
             Folders.Add(new Fact("Registry", "HKCU\\" + SelfInstall.UninstallKey + "  (only the \"Installed apps\" entry)"));
             Folders.Add(new Fact("Start menu", "one shortcut: " + SelfInstall.DisplayName));
             Folders.Add(new Fact("Startup (optional)", "only if you tick \"Start with Windows\" in Settings: one shortcut " + _startup.ShortcutPath + " (no registry Run key, no scheduled task, no service)"));
-            Folders.Add(new Fact("Launcher mod list (optional)", "only when you press \"Tick the mods for me\" on Home, or tick \"Tick the mods automatically after each update\" in Settings: "
+            Folders.Add(new Fact("Launcher mod list (optional)", "only when you press \"Tick them in the launcher for me\" on Play or in Settings, or tick \"Tick the mods automatically after each update\" in Settings: "
                 + (LauncherFilePath ?? "Documents\\Mount and Blade II Bannerlord\\Configs\\LauncherData.xml")
                 + ". Only the Multiplayer list changes (our modules ticked, in the right order); a dated copy of the previous file is kept next to it, and Undo puts it back."));
             if (_svc.Verifier.TrustedFingerprints.Count == 0) Fingerprints.Add("No release key embedded yet (placeholder): every release will be refused.");
@@ -1006,6 +1045,235 @@ namespace Lotr.Updater.ViewModels
             catch (Exception ex) { _svc.Log.Warn(ex.Message); }
         }
 
+        #region Launcher look (0.3.0): what the Home screen shows
+        // Presentation only: every value below is read from what the check, the plan and the install already produce.
+        // Nothing here downloads, installs or decides anything; the buttons call the same commands as before.
+
+        private bool _installing;
+        private int _installStage;
+        private RelayCommand _updateNowCmd, _sealCmd, _detailsCmd;
+
+        public ObservableCollection<BannerModuleRow> BannerModules { get; } = new ObservableCollection<BannerModuleRow>();
+        public ObservableCollection<StationRow> Stations { get; } = new ObservableCollection<StationRow>
+        {
+            new StationRow { Label = "DOWNLOAD", ShowRight = true },
+            new StationRow { Label = "VERIFY", ShowLeft = true, ShowRight = true },
+            new StationRow { Label = "INSTALL", ShowLeft = true, ShowRight = true },
+            new StationRow { Label = "READY", ShowLeft = true },
+        };
+
+        private string _bannerHeader;
+        public string BannerHeader { get => _bannerHeader; set => Set(ref _bannerHeader, value); }
+        private string _homeEyebrow;
+        public string HomeEyebrow { get => _homeEyebrow; set => Set(ref _homeEyebrow, value); }
+        private string _homeTitle;
+        public string HomeTitle { get => _homeTitle; set => Set(ref _homeTitle, value); }
+        private string _homeLede;
+        public string HomeLede { get => _homeLede; set => Set(ref _homeLede, value); }
+        private string _sealKind = "wait";
+        /// <summary>update | wait | play | locate: the look of the round button.</summary>
+        public string SealKind { get => _sealKind; set => Set(ref _sealKind, value); }
+        private string _sealTitle = "···";
+        public string SealTitle { get => _sealTitle; set => Set(ref _sealTitle, value); }
+        private string _sealSub;
+        public string SealSub { get => _sealSub; set => Set(ref _sealSub, value); }
+        private string _sealCaption;
+        /// <summary>Line under the round button (what it does), null when the links say it.</summary>
+        public string SealCaption { get => _sealCaption; set => Set(ref _sealCaption, value); }
+        private bool _showDetailsLink;
+        public bool ShowDetailsLink { get => _showDetailsLink; set => Set(ref _showDetailsLink, value); }
+        private bool _installingNow;
+        public bool InstallingNow { get => _installingNow; set => Set(ref _installingNow, value); }
+        private bool _waitingLine;
+        /// <summary>A check, a background download or a verify is running (not an install): the pulsing line on Home.</summary>
+        public bool WaitingLine { get => _waitingLine; set => Set(ref _waitingLine, value); }
+        private bool _canCheckAgain;
+        /// <summary>The last check failed and the game is there: "Check again" under the round button.</summary>
+        public bool CanCheckAgain { get => _canCheckAgain; set => Set(ref _canCheckAgain, value); }
+        private bool _offerTick;
+        /// <summary>Ready, and the launcher's list does not have our modules ticked yet: "Tick them for me".</summary>
+        public bool OfferTick { get => _offerTick; set => Set(ref _offerTick, value); }
+        private string _newsVersion;
+        public string NewsVersion { get => _newsVersion; set => Set(ref _newsVersion, value); }
+        private string _newsTeaser;
+        public string NewsTeaser { get => _newsTeaser; set => Set(ref _newsTeaser, value); }
+        private string _homeWarning;
+        /// <summary>The game is found but something about it needs the player (the Modules folder is not writable).</summary>
+        public string HomeWarning { get => _homeWarning; set => Set(ref _homeWarning, value); }
+        private string _homeLauncherResult;
+        /// <summary>What "Tick them for me" / "Undo" just did, shown on Home while the mods are ready.</summary>
+        public string HomeLauncherResult { get => _homeLauncherResult; set => Set(ref _homeLauncherResult, value); }
+
+        /// <summary>The round button's single click: update when there is one, open the game when ready (or when the check
+        /// failed but the game is there), pick the game folder when it is not found.</summary>
+        public RelayCommand SealCommand => _sealCmd ?? (_sealCmd = new RelayCommand(() =>
+        {
+            if (SealKind == "update") UpdateNowCommand.Execute(null);
+            else if (SealKind == "play") LaunchCommand.Execute(null);
+            else if (SealKind == "locate") BrowseGameCommand.Execute(null);
+        }, () => SealKind == "update" ? UpdateNowCommand.CanExecute(null)
+               : SealKind == "play" ? LaunchCommand.CanExecute(null)
+               : SealKind == "locate" && BrowseGameCommand.CanExecute(null)));
+
+        /// <summary>One click on Update. A plan with a warning or a blocker still opens the plan page first (as in 0.2.0),
+        /// so nothing that needs the player's attention is ever skipped.</summary>
+        public RelayCommand UpdateNowCommand => _updateNowCmd ?? (_updateNowCmd = new RelayCommand(() =>
+        {
+            var p = _latest?.Plan;
+            if (p == null || !p.HasChanges) return;
+            ShowPlan(p, "Update to " + ReleaseLabel(_latest.Manifest));
+            if (p.IsBlocked || p.Issues.Any(i => i.Severity != IssueSeverity.Info)) return;
+            _ = InstallAsync();
+        }, () => !Busy && _latest?.Plan != null && _latest.Plan.HasChanges));
+
+        /// <summary>"Show details": the live log while installing, else the exact plan.</summary>
+        public RelayCommand DetailsCommand => _detailsCmd ?? (_detailsCmd = new RelayCommand(() =>
+        {
+            if (_installing || _latest?.Plan == null || !_latest.Plan.HasChanges) Page = Page.Progress;
+            else ShowPlan(_latest.Plan, "Update to " + ReleaseLabel(_latest.Manifest));
+        }, () => _installing || !Busy));
+
+        /// <summary>Recomputed whenever the status, the progress or Busy changes (cheap: a handful of strings).</summary>
+        private void RefreshLook()
+        {
+            if (_svc == null) return; // a setter ran before the constructor finished
+            if (!_ui.CheckAccess()) { _ui.BeginInvoke(new Action(RefreshLook)); return; }
+            var installed = _svc.InstalledManifest;
+            var offered = _latest != null && _latest.Error == null ? _latest.Manifest : null;
+            var plan = offered != null ? _latest.Plan : null;
+            var shown = offered ?? installed;
+            bool pending = plan != null && plan.HasChanges;
+            int pct = (int)Math.Round(ProgressValue * 100);
+            InstallingNow = _installing;
+            WaitingLine = Busy && !_installing;
+
+            // ---- the modules on the banner (Event first, then Core; never the admin module)
+            var mods = shown == null ? new List<ManifestModule>()
+                : shown.Modules.Where(x => !string.Equals(x.Role, ModuleRoles.AdminClient, StringComparison.Ordinal))
+                               .OrderBy(x => x.IsCore() ? 1 : 0).ToList();
+            BannerModules.Clear();
+            foreach (var m in mods)
+            {
+                var mp = plan?.Modules.FirstOrDefault(x => string.Equals(x.Module.Id, m.Id, StringComparison.OrdinalIgnoreCase));
+                var had = installed?.Modules.FirstOrDefault(x => string.Equals(x.Id, m.Id, StringComparison.OrdinalIgnoreCase))?.Version;
+                var row = new BannerModuleRow { Name = m.DisplayName(), Version = Ver(m.Version) };
+                if (offered == null || StatusKind == "checking") { row.Pill = StatusKind == "checking" ? "CHECKING" : null; row.PillKind = "wait"; }
+                else if (mp != null && mp.HasChanges)
+                {
+                    if (had != null && had != m.Version) row.Version = Ver(had) + " → " + Ver(m.Version);
+                    row.Pill = _installing ? pct + " %" : mp.IsNewFolder ? "INSTALL" : "UPDATE";
+                    row.PillKind = "up";
+                }
+                else { row.Pill = "UP TO DATE"; row.PillKind = "ok"; }
+                BannerModules.Add(row);
+            }
+            if (mods.Count == 0)
+                foreach (var n in new[] { "LotRMPEvent", "LotRMPCore" })
+                    BannerModules.Add(new BannerModuleRow { Name = n, Version = "not installed", Pill = StatusKind == "checking" ? "CHECKING" : null, PillKind = "wait" });
+            int count = BannerModules.Count;
+            BannerHeader = count == 1 ? "1 MODULE" : count == 2 ? "2 MODULES · BOTH REQUIRED" : count + " MODULES · ALL REQUIRED";
+
+            // ---- the road, the title and the round button
+            var ev = shown?.Modules.FirstOrDefault(x => string.Equals(x.Role, ModuleRoles.Event, StringComparison.Ordinal)) ?? mods.FirstOrDefault();
+            int changes = plan?.Modules.Sum(m => m.Actions.Count) ?? 0;
+            string[] notes = { "", "", "", "" };
+            int stage; // -1: road unlit; 0..3: that station is the current one; 4: everything done
+            ShowDetailsLink = false;
+            SealCaption = null;
+            if (_installing)
+            {
+                stage = _installStage;
+                for (int i = 0; i < stage; i++) notes[i] = "done";
+                notes[stage] = stage < 3 ? pct + " %" : "";
+                HomeEyebrow = "UPDATING";
+                HomeTitle = stage == 0 ? (ProgressTitle == "Waiting for a download slot" ? "Waiting for a download slot" : "Downloading")
+                          : stage == 1 ? "Verifying files" : "Installing";
+                HomeLede = "Please keep this window open. Your game folder is only changed at the very end.";
+                SealKind = "wait"; SealTitle = pct + " %"; SealSub = "please wait";
+                ShowDetailsLink = true;
+            }
+            else if (pending && StatusKind != "checking")
+            {
+                stage = 0;
+                bool fresh = StatusKind == "missing";
+                string verb = fresh ? "Install" : "Update";
+                notes[0] = plan.DownloadBytes > 0 ? Units.Bytes(plan.DownloadBytes) : "already here";
+                notes[1] = Plural(changes, "file");
+                notes[2] = "a few seconds";
+                HomeEyebrow = fresh ? "NOT INSTALLED YET" : "UPDATE AVAILABLE";
+                HomeTitle = fresh ? "Install LOTR Event" : "Version " + Ver(ev?.Version);
+                HomeLede = Plural(changes, "file") + (fresh ? " to install, " : " changed, ") +
+                           (plan.DownloadBytes > 0 ? Units.Bytes(plan.DownloadBytes) + " to download. " : "already downloaded. ") +
+                           (plan.IsBlocked || plan.Issues.Any(i => i.Severity != IssueSeverity.Info) ? "Something needs your attention first: click " + verb + " to see what."
+                                           : "Nothing changes on your PC until you click " + verb + ".");
+                SealKind = Busy ? "wait" : "update";
+                SealTitle = verb.ToUpperInvariant();
+                SealSub = plan.DownloadBytes > 0 ? Units.Bytes(plan.DownloadBytes) : "ready";
+                ShowDetailsLink = true;
+            }
+            else if (StatusKind == "ok")
+            {
+                stage = 4;
+                notes[0] = notes[1] = notes[2] = "done";
+                HomeEyebrow = "UP TO DATE";
+                HomeTitle = "Ready to play";
+                // Named in the launcher's load order (Core first), as the player sees them there.
+                var tick = mods.OrderBy(x => x.IsCore() ? 0 : 1).Select(x => x.DisplayName()).ToList();
+                HomeLede = tick.Count == 0 ? "Your mods match the server."
+                    : LauncherStatusKind == "ok"
+                    ? "Your mods match the server, and " + (tick.Count == 2 ? "both modules are" : "the modules are") + " ticked in the Bannerlord launcher."
+                    : "Your mods match the server. In the Bannerlord launcher, tick " + (tick.Count == 2 ? "both modules: " : tick.Count == 1 ? "the module " : "all the modules: ") + Join(tick) + ".";
+                SealKind = Busy ? "wait" : "play"; SealTitle = "PLAY"; SealSub = null;
+                SealCaption = LaunchHint?.Replace("Opens", "Starts").Replace(" (official launcher)", "");
+            }
+            else if (StatusKind == "checking")
+            {
+                stage = -1;
+                HomeEyebrow = "CHECKING";
+                HomeTitle = "Checking for updates";
+                HomeLede = "Comparing your mod files with the server. This takes a few seconds.";
+                SealKind = "wait"; SealTitle = "···"; SealSub = "checking";
+            }
+            else
+            {
+                // Could not check, older release offered, or no game folder: the same words as before, and the way out.
+                stage = -1;
+                HomeEyebrow = !HasGame ? "GAME NOT FOUND" : RollbackOffered ? "OLDER RELEASE OFFERED" : "COULD NOT CHECK";
+                HomeTitle = StatusTitle;
+                // No game: a short sentence here; the full search report (rejected folders...) stays in Settings.
+                HomeLede = HasGame ? StatusDetail : "Bannerlord was not found on this PC. Click Locate and choose the game folder: the one that contains 'bin' and 'Modules'.";
+                if (HasGame) { SealKind = Busy ? "wait" : "play"; SealTitle = "PLAY"; SealSub = null; SealCaption = RollbackOffered ? "Nothing changes until you accept the rollback." : "Your mods could not be compared with the server."; }
+                else { SealKind = "locate"; SealTitle = "LOCATE"; SealSub = "the game"; SealCaption = "Choose the Bannerlord folder."; }
+            }
+            if (Busy && !_installing && SealKind == "wait" && StatusKind != "checking") { SealTitle = "···"; SealSub = "please wait"; }
+            for (int i = 0; i < 4; i++)
+            {
+                var s = Stations[i];
+                s.State = stage < 0 ? "todo" : stage == 4 || i < stage ? "done" : i == stage ? "active" : "todo";
+                s.Note = notes[i];
+                s.LeftLit = i > 0 && stage >= i;   // the segment arriving here is lit once the previous station is done
+                s.RightLit = stage > i;
+            }
+            OfferTick = StatusKind == "ok" && !_installing && ShowLauncherCard && LauncherStatusKind != "ok";
+            HomeLauncherResult = StatusKind == "ok" && !_installing ? _launcherMessage : null;
+            HomeWarning = HasGame ? GameNote : null;
+            CanCheckAgain = HasGame && StatusKind == "error" && !Busy;
+            CommandRequery();
+        }
+
+        /// <summary>"v1.0.2.5" and "1.0.2.5" both show as 1.0.2.5 (modules write their version either way).</summary>
+        private static string Ver(string v) => string.IsNullOrEmpty(v) ? "" : v.Length > 1 && (v[0] == 'v' || v[0] == 'V') && char.IsDigit(v[1]) ? v.Substring(1) : v;
+
+        /// <summary>First line of the notes, without its bullet, for the "Patch notes" line on Home.</summary>
+        private static string Teaser(string notes)
+        {
+            if (string.IsNullOrEmpty(notes)) return null;
+            var line = notes.Split('\n').Select(l => l.Trim().TrimStart('-', '*', '•', '·', ' ').Trim()).FirstOrDefault(l => l.Length > 0);
+            if (line == null) return null;
+            return line.Length > 70 ? line.Substring(0, 67).TrimEnd() + "…" : line;
+        }
+        #endregion
+
         #region Launcher mod list (opt-in "Tick the mods for me") and "What's new"
         // Everything for these two features lives in this region. The launcher's list is only ever changed on a click (or after
         // an update when the player ticked the Settings option), with a backup next to the file and an Undo link.
@@ -1045,7 +1313,7 @@ namespace Lotr.Updater.ViewModels
         public string LauncherStatus { get => _launcherStatus; set => Set(ref _launcherStatus, value); }
         private string _launcherStatusKind;
         /// <summary>ok | warn | error | null</summary>
-        public string LauncherStatusKind { get => _launcherStatusKind; set => Set(ref _launcherStatusKind, value); }
+        public string LauncherStatusKind { get => _launcherStatusKind; set { if (Set(ref _launcherStatusKind, value)) RefreshLook(); } }
         private bool _canUndoLauncher;
         public bool CanUndoLauncher { get => _canUndoLauncher; set => Set(ref _canUndoLauncher, value); }
         public string LauncherFilePath => LauncherSel?.FilePath;
@@ -1088,7 +1356,7 @@ namespace Lotr.Updater.ViewModels
             LauncherStatus = r.Message;
             LauncherStatusKind = r.Ok ? (r.OtherLotREntries.Count > 0 ? "warn" : "ok") : r.Outcome == Core.Game.LauncherSelectionOutcome.Failed ? "error" : "warn";
             CanUndoLauncher = _launcherUndo != null;
-            CommandRequery();
+            RefreshLook();
         }
 
         /// <summary>The click (or, with <paramref name="automatic"/>, the opt-in after an update). Returns the sentence shown.</summary>
@@ -1135,7 +1403,26 @@ namespace Lotr.Updater.ViewModels
             return await TickLauncherModsAsync(true);
         }
 
-        // ---- What's new (notes of the signed manifest; plain text only)
+        // ---- What's new: the site's chronicle for that version (/hub.json, 0.3.1), else the notes of the signed manifest;
+        // plain text only either way.
+        private List<Core.News.SiteNewsItem> _siteNews;
+        private bool _siteNewsLoading;
+
+        /// <summary>After each successful check: reads the site's patch notes in the background, then refreshes the cards.
+        /// A failure keeps what was there (the previous site notes, or the manifest's).</summary>
+        private async Task LoadSiteNewsAsync()
+        {
+            if (_siteNewsLoading) return;
+            _siteNewsLoading = true;
+            try
+            {
+                var items = await Task.Run(() => _svc.FetchSiteNewsAsync(CancellationToken.None));
+                if (items != null) { _siteNews = items; RefreshNews(); }
+            }
+            catch (Exception ex) { _svc.Log.Detail("Site news: " + ex.Message); }
+            finally { _siteNewsLoading = false; }
+        }
+
         private string _newsHeading;
         public string NewsHeading { get => _newsHeading; set => Set(ref _newsHeading, value); }
         private string _newsBody;
@@ -1143,6 +1430,11 @@ namespace Lotr.Updater.ViewModels
         private string _newsNote;
         /// <summary>"Arrives with the update" when the notes belong to a release not installed yet.</summary>
         public string NewsNote { get => _newsNote; set => Set(ref _newsNote, value); }
+        private string _newsSignatureText, _newsSource;
+        /// <summary>The manifest's signature line, only when the notes shown are the manifest's (site text is not signed).</summary>
+        public string NewsSignatureText { get => _newsSignatureText; set => Set(ref _newsSignatureText, value); }
+        /// <summary>Where the notes come from, when it is the website.</summary>
+        public string NewsSource { get => _newsSource; set => Set(ref _newsSource, value); }
         public ObservableCollection<Core.News.NewsEntry> PreviousNews { get; } = new ObservableCollection<Core.News.NewsEntry>();
         public string ChroniclesUrl => Core.News.ReleaseNews.ChroniclesUrl(_svc.Config.BaseUrl);
 
@@ -1162,13 +1454,19 @@ namespace Lotr.Updater.ViewModels
 
                 var shown = offered ?? installed;
                 var cur = Core.News.ReleaseNews.FromManifest(shown);
-                NewsHeading = Core.News.ReleaseNews.Heading(cur);
-                NewsBody = Core.News.ReleaseNews.Body(cur);
+                var evVersion = shown?.Modules.FirstOrDefault(x => string.Equals(x.Role, ModuleRoles.Event, StringComparison.Ordinal))?.Version;
+                var site = Core.News.SiteNews.For(_siteNews, evVersion);
+                NewsHeading = site != null ? Core.News.SiteNews.Heading(site) : Core.News.ReleaseNews.Heading(cur);
+                NewsBody = site != null ? Core.News.SiteNews.Body(site) : Core.News.ReleaseNews.Body(cur);
+                NewsVersion = Ver(evVersion) is var nv && nv.Length > 0 ? nv : cur?.Title;
+                NewsTeaser = site != null ? site.Title : Teaser(cur?.Notes);
+                NewsSignatureText = site != null ? null : SignatureText;
+                NewsSource = site != null ? "From the Chronicles on the website. Display only: what gets installed is always checked against the team's signature." : null;
                 NewsNote = cur != null && installed != null && offered != null && offered.ReleaseId != installed.ReleaseId && _latest.Plan != null && _latest.Plan.HasChanges
                     ? "Arrives with the update (not installed yet)."
                     : cur != null && installed == null ? "Arrives when you install the mod." : null;
                 PreviousNews.Clear();
-                foreach (var e in _newsHistory.Previous(cur)) PreviousNews.Add(e);
+                foreach (var e in site != null ? Core.News.SiteNews.Previous(_siteNews, site) : _newsHistory.Previous(cur)) PreviousNews.Add(e);
             }
             catch (Exception ex) { _svc.Log.Detail("What's new: " + ex.Message); }
         }

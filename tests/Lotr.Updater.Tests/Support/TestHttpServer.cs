@@ -102,6 +102,8 @@ namespace Lotr.Updater.Testing
         private void Handle(HttpListenerContext ctx)
         {
             var path = ctx.Request.Url.AbsolutePath;
+            // The site's news feed lives at the site root in production; here it is <root>\site\hub.json.
+            var servedPath = path == "/hub.json" ? "/files/site/hub.json" : path;
             int hit = _hits.AddOrUpdate(path, 1, (_, n) => n + 1);
             OnRequest?.Invoke(ctx.Request.HttpMethod + " " + ctx.Request.Url.PathAndQuery);
             try
@@ -115,7 +117,7 @@ namespace Lotr.Updater.Testing
                     return;
                 }
                 if (path.StartsWith("/api/", StringComparison.Ordinal)) { Api(ctx, path); return; }
-                if (!path.StartsWith("/files/", StringComparison.Ordinal)) { NotFound(ctx); return; }
+                if (!servedPath.StartsWith("/files/", StringComparison.Ordinal)) { NotFound(ctx); return; }
                 var slotToken = ctx.Request.QueryString["slot"];
                 if (EnforceSlots && slotToken != null && SlotExpired(slotToken))
                 {
@@ -124,7 +126,7 @@ namespace Lotr.Updater.Testing
                     ctx.Response.Close();
                     return;
                 }
-                var rel = Uri.UnescapeDataString(path.Substring("/files/".Length)).Replace('/', Path.DirectorySeparatorChar);
+                var rel = Uri.UnescapeDataString(servedPath.Substring("/files/".Length)).Replace('/', Path.DirectorySeparatorChar);
                 var file = Path.GetFullPath(Path.Combine(_root, rel));
                 if (!file.StartsWith(_root, StringComparison.OrdinalIgnoreCase) || !File.Exists(file)) { NotFound(ctx); return; }
                 var data = File.ReadAllBytes(file);
