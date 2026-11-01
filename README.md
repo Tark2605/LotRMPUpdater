@@ -63,5 +63,3 @@ stops every process it started by PID and deletes the folder (`-Keep` keeps it).
 --home <temp> --game <fake game> --trust <test .pub.pem>` (`--tour <dir>` saves screenshots, `--headless --report <file>
 [--self-update] [--check-only] [--send-support]` runs without a window). Fonts: `tools/fonts/make_updater_fonts.py`
 rebuilds `src/Lotr.Updater/Resources/Fonts/` from the site's OFL packages.
-
-Open items: `docs/review-after/RESOLVED.md`.

@@ -2,7 +2,7 @@
 
 Status: implemented 15/10/2026 — `src/LotR.Releases` (library, netstandard2.0 + net48), `tools/LotR.Publish`
 (`lotr-publish.exe`, net48), `tests/LotR.Releases.Tests` (net8.0 + net48). Binding rules: `docs/CONTRACTS.md` §1–3, §5,
-§8. Open points: `docs/review-after/C-manifest.md`.
+§8. Open points: the team's internal review notes (not published).
 
 ## 1. What a release is
 

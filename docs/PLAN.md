@@ -85,4 +85,4 @@ The Core module is about 9.5 GB, so distribution has to be frugal for the server
 - The updater updates itself from `files/updater/latest.json` (signed with the release key, `latest.json.sig`): new
   exe verified (SHA-256, release-key signature or same Authenticode signer), swapped at the next start, previous exe
   kept for rollback.
-- Open items after the final review pass: `docs/review-after/RESOLVED.md`.
+- Open items after the final review pass: the team's internal review notes (not published).

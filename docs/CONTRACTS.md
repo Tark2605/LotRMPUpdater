@@ -2,7 +2,7 @@
 
 Everything that the updater, the publish tool, the server services and the website must agree on.
 Change it only through the coordinator. Anything still open is marked **OPEN** and must be handled with a
-`REVIEW-AFTER(<topic>)` comment in code plus a line in `docs/review-after/<workstream>.md`.
+`REVIEW-AFTER(<topic>)` comment in code plus a line in the team's internal review notes (not published).
 
 ## 1. Server layout (Caddy, under the deploy root, e.g. `C:\www\lotrmp`)
 

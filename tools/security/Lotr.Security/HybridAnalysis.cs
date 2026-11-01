@@ -13,7 +13,7 @@ namespace Lotr.Security;
 public sealed class HaOptions
 {
     // Endpoint paths follow the public Falcon Sandbox API v2 docs (https://www.hybrid-analysis.com/docs/api/v2).
-    // Verify them once with the first real key (docs/review-after/G-security.md, "ha-api").
+    // Verify them once with the first real key (the team's internal review notes, "ha-api").
     public string BaseUrl = "https://www.hybrid-analysis.com/api/v2";
     public string SampleUrl = "https://www.hybrid-analysis.com/sample/";
     /// <summary>Also run a full sandbox detonation (slow, counts against the submission quota).</summary>

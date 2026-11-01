@@ -421,4 +421,4 @@ signature de test (sans valeur pour les joueurs) fonctionne aujourd'hui.
 
 ## 9. Open points
 
-See `docs/review-after/G-security.md`.
+See the team's internal review notes (not published).
