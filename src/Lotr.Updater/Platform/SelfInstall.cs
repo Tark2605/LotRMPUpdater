@@ -239,7 +239,7 @@ namespace Lotr.Updater.Platform
                 try { if (Directory.Exists(d)) Directory.Delete(d, true); } catch (Exception) { }
             foreach (var f in Directory.Exists(p.Home) ? Directory.GetFiles(p.Home) : new string[0])
                 try { File.Delete(f); } catch (Exception) { }
-            var psi = new ProcessStartInfo("cmd.exe", "/c ping 127.0.0.1 -n 4 >nul & rmdir /s /q \"" + p.Home + "\"")
+            var psi = new ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c ping 127.0.0.1 -n 4 >nul & rmdir /s /q \"" + p.Home + "\"")
             {
                 CreateNoWindow = true,
                 UseShellExecute = false,

@@ -170,6 +170,10 @@ namespace Lotr.Updater.Core.SelfUpdate
             if (bytes == null) { _log?.Write(LogLevel.Detail, "No updater release published yet (latest.json not found)."); return null; }
             var sig = await _fetch.GetBytesAsync(new Uri(uri + ".sig"), ct, allowNotFound: true, maxBytes: 64 * 1024).ConfigureAwait(false);
 
+            // A build that carries the release key accepts only a key-signed latest.json: without it, its version and
+            // hash would be the server's word alone (Authenticode then stays an extra check, never a replacement).
+            if (sig == null && _keys.Count > 0)
+                throw new SelfUpdateException("The updater release file (latest.json) is not signed with the LotR team key. Ignored.");
             bool keySigned = false;
             if (sig != null)
             {

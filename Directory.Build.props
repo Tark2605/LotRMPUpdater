@@ -7,7 +7,7 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Company>LotR MP Event team</Company>
     <Product>LotR MP Event updater</Product>
-    <Version>0.3.2</Version>
+    <Version>0.3.3</Version>
   </PropertyGroup>
   <!-- Lets the .NET SDK build net48 targets without a Visual Studio / targeting pack install. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

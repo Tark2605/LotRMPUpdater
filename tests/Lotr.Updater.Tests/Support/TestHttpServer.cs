@@ -102,8 +102,8 @@ namespace Lotr.Updater.Testing
         private void Handle(HttpListenerContext ctx)
         {
             var path = ctx.Request.Url.AbsolutePath;
-            // The site's news feed lives at the site root in production; here it is <root>\site\hub.json.
-            var servedPath = path == "/hub.json" ? "/files/site/hub.json" : path;
+            // The site's news feed and the pause notice live at the site root in production; here in <root>\site\.
+            var servedPath = path == "/hub.json" ? "/files/site/hub.json" : path == "/status.json" ? "/files/site/status.json" : path;
             int hit = _hits.AddOrUpdate(path, 1, (_, n) => n + 1);
             OnRequest?.Invoke(ctx.Request.HttpMethod + " " + ctx.Request.Url.PathAndQuery);
             try

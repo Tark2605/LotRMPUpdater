@@ -44,6 +44,13 @@ namespace LotR.Releases.Publishing
 
         public bool VerifyAfterPublish { get; set; } = true;
 
+        /// <summary>
+        /// Team signing (docs/TEAM-SIGNING.md): the server has no private key. The release is written and verified like
+        /// any other but NOT signed and no channel moves; &lt;releases&gt;\pending.json names it until a team member's PC
+        /// signs it (lotr-publish sign-release) and the signature comes back (apply-signed).
+        /// </summary>
+        public bool Pending { get; set; }
+
         /// <summary>For tests: fixed clock.</summary>
         public DateTime? NowUtc { get; set; }
 
@@ -91,6 +98,9 @@ namespace LotR.Releases.Publishing
 
         public bool ChannelUpdated { get; set; }
 
+        /// <summary>Written unsigned, waiting for the team signature (pending.json points at it).</summary>
+        public bool Pending { get; set; }
+
         public TimeSpan Elapsed { get; set; }
     }
 
@@ -101,9 +111,15 @@ namespace LotR.Releases.Publishing
 
         public static PublishResult Publish(PublishRequest req)
         {
-            if (req.Signers == null || req.Signers.Count == 0)
+            bool pending = req.Pending;
+            if (!pending && (req.Signers == null || req.Signers.Count == 0))
             {
-                throw new InvalidOperationException("publish needs at least one signing key");
+                throw new InvalidOperationException("publish needs at least one signing key (or --pending: the team signs it on a PC)");
+            }
+
+            if (pending && req.Signers != null && req.Signers.Count > 0)
+            {
+                throw new InvalidOperationException("--pending publishes WITHOUT a key: do not give one");
             }
 
             var sw = Stopwatch.StartNew();
@@ -115,15 +131,18 @@ namespace LotR.Releases.Publishing
                 var plan = Build(req, ProcessMode.Publish, staging, out var store);
                 var m = plan.Manifest;
                 byte[] manifestBytes = ManifestCodec.ToCanonicalBytes(m);
-                byte[] sig = ManifestSignature.Create(manifestBytes, req.Signers);
-                var self = ManifestSignature.Verify(manifestBytes, sig, req.Signers.Select(s => new TrustedKey(s.Spki)));
-                if (!self.Valid)
-                {
-                    throw new InvalidOperationException("self-check of the new signature failed: " + self.Message);
-                }
-
                 File.WriteAllBytes(Path.Combine(staging, ReleaseFolder.ManifestFile), manifestBytes);
-                File.WriteAllBytes(Path.Combine(staging, ReleaseFolder.SignatureFile), sig);
+                if (!pending)
+                {
+                    byte[] sig = ManifestSignature.Create(manifestBytes, req.Signers);
+                    var self = ManifestSignature.Verify(manifestBytes, sig, req.Signers.Select(s => new TrustedKey(s.Spki)));
+                    if (!self.Valid)
+                    {
+                        throw new InvalidOperationException("self-check of the new signature failed: " + self.Message);
+                    }
+
+                    File.WriteAllBytes(Path.Combine(staging, ReleaseFolder.SignatureFile), sig);
+                }
 
                 string final = Path.Combine(req.ReleasesRoot, m.ReleaseId);
                 if (Directory.Exists(final))
@@ -149,7 +168,7 @@ namespace LotR.Releases.Publishing
                 {
                     req.Log?.Report("verifying " + m.ReleaseId + " (decode + hash every object)...");
                     var trusted = req.Signers.Select(s => new TrustedKey(s.Spki)).ToList();
-                    result.Verification = ReleaseVerifier.Verify(final, trusted, req.Threads);
+                    result.Verification = ReleaseVerifier.Verify(final, trusted, req.Threads, signatureRequired: !pending);
                     if (!result.Verification.Ok)
                     {
                         string failed = Path.Combine(req.ReleasesRoot, ".failed-" + m.ReleaseId);
@@ -158,7 +177,12 @@ namespace LotR.Releases.Publishing
                     }
                 }
 
-                if (req.UpdateChannel)
+                if (pending)
+                {
+                    PendingMarker.Write(req.ReleasesRoot, new PendingMarker { ReleaseId = m.ReleaseId, Channel = m.Channel, PublishedAt = m.PublishedAt, PublishedBy = m.PublishedBy });
+                    result.Pending = true;
+                }
+                else if (req.UpdateChannel)
                 {
                     SetChannel(req.ReleasesRoot, m.Channel, m.ReleaseId);
                     result.ChannelUpdated = true;

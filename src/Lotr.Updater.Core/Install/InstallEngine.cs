@@ -723,6 +723,13 @@ namespace Lotr.Updater.Core.Install
         private void FinishCommit(SwapJournal j)
         {
             var oldRoot = Path.Combine(SwapJournal.StagingDir(j.ModuleFolder), "old");
+            // The journal sits in the game folder, which other Windows users may be able to write: never trust its
+            // backup folder (only one of ours, under BackupRoot) nor a staging folder that is a link to elsewhere.
+            if (!IsUnder(j.BackupDir, _paths.BackupRoot) || IsReparsePoint(SwapJournal.StagingDir(j.ModuleFolder)) || IsReparsePoint(oldRoot))
+            {
+                _log?.Write(LogLevel.Warn, "Swap journal in " + j.ModuleFolder + " ignored: its backup folder or staging folder is not one this updater made.");
+                return;
+            }
             try
             {
                 if (_fs.DirectoryExists(oldRoot))
@@ -744,6 +751,24 @@ namespace Lotr.Updater.Core.Install
             {
                 _log?.Write(LogLevel.Warn, "The update is installed, but the backup copy could not be completed: " + ex.Message + " (the old files stay in " + oldRoot + ")");
             }
+        }
+
+        private static bool IsUnder(string dir, string root)
+        {
+            if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(root)) return false;
+            try
+            {
+                var d = Path.GetFullPath(dir).TrimEnd('\\') + "\\";
+                var r = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+                return d.Length > r.Length && d.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException) { return false; }
+        }
+
+        private static bool IsReparsePoint(string dir)
+        {
+            try { return Directory.Exists(dir) && (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0; }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return true; }
         }
 
         private void RemoveEmptyDirs(string root)

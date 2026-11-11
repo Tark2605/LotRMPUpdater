@@ -401,6 +401,27 @@ namespace Lotr.Updater.Tests
         }
 
         [Fact]
+        public void Planted_swap_journal_cannot_write_outside_the_backup_folder()
+        {
+            using (var h = new Harness())
+            {
+                // Another Windows user who can write the game folder plants a "committed" journal whose backup folder
+                // is, say, the victim's Startup folder: the recovery at start-up must not move anything there.
+                var outside = Path.Combine(Path.GetDirectoryName(h.Modules), "victim-startup");
+                var staging = Path.Combine(h.Modules, "Planted", ".lotr-staging");
+                Directory.CreateDirectory(Path.Combine(staging, "old"));
+                File.WriteAllText(Path.Combine(staging, "old", "evil.lnk"), "x");
+                File.WriteAllText(Path.Combine(staging, "journal.json"),
+                    "{\"state\":\"committed\",\"releaseId\":\"x\",\"backupDir\":" + Lotr.Updater.Core.Json.Json.Write(outside) + ",\"ops\":[]}");
+
+                h.Service(); // start-up: LocateGame runs the recovery
+
+                Assert.False(File.Exists(Path.Combine(outside, "evil.lnk")));
+                Assert.False(Directory.Exists(outside));
+            }
+        }
+
+        [Fact]
         public async Task Mark_of_the_web_is_removed_and_verify_repairs()
         {
             using (var h = new Harness())

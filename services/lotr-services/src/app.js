@@ -216,9 +216,15 @@ function createServices(config, { now = () => Date.now(), logger = silentLogger,
                 if (!token && original) token = original.searchParams.get('slot');
                 // Only objects of Core modules need a slot; other objects (event module, admin client) pass.
                 // Anything that is not a release object (manifest, channels.json, the updater) never needs a slot.
-                const object = original ? path.posix.basename(original.pathname) : null;
+                // Decide on the path as the file server sees it: percent-decoded, and case-insensitive like NTFS
+                // (/OBJECTS/ or /%6Fbjects/ must not slip past). An undecodable path counts as an unknown object, so as a Core one.
+                let decoded = null;
+                if (original) {
+                    try { decoded = decodeURIComponent(original.pathname).replace(/\\/g, '/').toLowerCase(); } catch { decoded = '/objects/?'; }
+                }
+                const object = decoded ? path.posix.basename(decoded) : null;
                 if (object && !coreObjects.isKnown(object) && now() - coreObjects.loadedAt > 5000) coreObjects.refresh();
-                if (original && (!original.pathname.includes('/objects/') || !coreObjects.has(object))) {
+                if (decoded && (!decoded.includes('/objects/') || !coreObjects.has(object))) {
                     res.writeHead(200, { 'Content-Length': 0, 'Cache-Control': 'no-store' });
                     return res.end();
                 }

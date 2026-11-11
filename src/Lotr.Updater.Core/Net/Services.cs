@@ -50,6 +50,8 @@ namespace Lotr.Updater.Core.Net
         public Uri UpdaterLatest => new Uri(Base, "files/updater/latest.json");
         /// <summary>The site's news feed (its Chronicles as plain text): the patch notes shown on Play and News.</summary>
         public Uri SiteNews => new Uri(Base, "hub.json");
+        /// <summary>The server's pause notice (event lock): 200 + JSON while downloads are paused, 404 otherwise (0.3.3).</summary>
+        public Uri Status => new Uri(Base, "status.json");
 
         public string[] Describe() => new[]
         {

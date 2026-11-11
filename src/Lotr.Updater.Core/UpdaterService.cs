@@ -215,6 +215,26 @@ namespace Lotr.Updater.Core
             }
         }
 
+        /// <summary>The server's pause notice (/status.json, event lock), asked only after a failed check: one try, null when
+        /// there is none (404) or it cannot be read. Never throws (except cancellation).</summary>
+        public async Task<News.ServerNotice> FetchServerNoticeAsync(CancellationToken ct)
+        {
+            try
+            {
+                var once = new HttpFetcher(Fetcher.Client, Fs, null, new RetryPolicy { MaxAttempts = 1 });
+                var b = await once.GetBytesAsync(Endpoints.Status, ct, allowNotFound: true, maxBytes: News.ServerNotice.MaxBytes).ConfigureAwait(false);
+                if (b == null) return null;
+                var n = News.ServerNotice.Parse(b, Config.BaseUrl);
+                if (n != null) Log.Info("The server has paused downloads (event lock)" + (n.UntilUtc != null ? " until " + n.UntilUtc.Value.ToString("u", System.Globalization.CultureInfo.InvariantCulture) : "") + ".");
+                return n;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Log.Detail("No server notice: " + ex.Message);
+                return null;
+            }
+        }
+
         /// <summary>Checks the channel, verifies the signature, compares with the disk. Changes nothing in the game folder.</summary>
         public async Task<CheckResult> CheckAsync(IProgress<string> status, CancellationToken ct)
         {

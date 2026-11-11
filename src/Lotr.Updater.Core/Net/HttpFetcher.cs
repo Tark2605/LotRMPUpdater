@@ -100,7 +100,8 @@ namespace Lotr.Updater.Core.Net
                             {
                                 var len = resp.Content.Headers.ContentLength;
                                 if (len.HasValue && len.Value > maxBytes) throw new HttpFetchException("Response too large from " + uri);
-                                return await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                                // Content-Length is absent on chunked or compressed answers: count the decoded bytes too.
+                                return await ReadLimitedAsync(resp.Content, maxBytes, uri, cts.Token).ConfigureAwait(false);
                             }
                             if (resp.StatusCode == HttpStatusCode.NotFound && allowNotFound) return null;
                             if (!IsTransient(resp.StatusCode))
@@ -121,12 +122,29 @@ namespace Lotr.Updater.Core.Net
             }
         }
 
+        /// <summary>Reads a body, decoded, and stops with an error past <paramref name="maxBytes"/> (no decompression bomb).</summary>
+        private static async Task<byte[]> ReadLimitedAsync(HttpContent content, long maxBytes, Uri uri, CancellationToken ct)
+        {
+            using (var s = await content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var ms = new MemoryStream())
+            {
+                var buf = new byte[81920];
+                int n;
+                while ((n = await s.ReadAsync(buf, 0, buf.Length, ct).ConfigureAwait(false)) > 0)
+                {
+                    if (ms.Length + n > maxBytes) throw new HttpFetchException("Response too large from " + uri);
+                    ms.Write(buf, 0, n);
+                }
+                return ms.ToArray();
+            }
+        }
+
         public async Task<string> PostJsonAsync(Uri uri, string json, CancellationToken ct, Func<HttpResponseMessage, string, Task<bool>> handleNonSuccess = null)
         {
             using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
             using (var resp = await _http.PostAsync(uri, content, ct).ConfigureAwait(false))
             {
-                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var body = Encoding.UTF8.GetString(await ReadLimitedAsync(resp.Content, 1L << 20, uri, ct).ConfigureAwait(false));
                 if (resp.IsSuccessStatusCode) return body;
                 if (handleNonSuccess != null && await handleNonSuccess(resp, body).ConfigureAwait(false)) return null;
                 throw new HttpFetchException($"The server answered {(int)resp.StatusCode} {resp.ReasonPhrase}", resp.StatusCode);

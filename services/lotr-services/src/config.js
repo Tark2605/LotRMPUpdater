@@ -49,6 +49,8 @@ const DEFAULTS = Object.freeze({
         retryAfterMaxSec: 60,
         // Distinct install ids one IP may keep in the waiting line (a family behind one router: a few).
         maxWaitingPerIp: 6,
+        // Download slots one address (IPv6: one /64) may hold at the same time.
+        maxActivePerIp: 3,
         // forward_auth on core objects: "advisory" answers 200 and only counts, "enforce" answers 403 without a valid slot.
         // REVIEW-AFTER(queue-enforcement): CONTRACTS section 4 keeps enforcement OPEN.
         enforcement: 'advisory',

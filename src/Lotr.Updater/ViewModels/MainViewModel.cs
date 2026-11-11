@@ -226,7 +226,7 @@ namespace Lotr.Updater.ViewModels
 
         // ------------------------------------------------------------ home: mod status
         private string _statusKind = "checking";
-        /// <summary>checking | ok | update | missing | error</summary>
+        /// <summary>checking | ok | update | missing | error | paused (the server paused downloads: <see cref="Notice"/>)</summary>
         public string StatusKind { get => _statusKind; set { if (Set(ref _statusKind, value)) RefreshLook(); } }
         private string _statusTitle = "Checking…";
         public string StatusTitle { get => _statusTitle; set { if (Set(ref _statusTitle, value)) RefreshLook(); } }
@@ -354,6 +354,12 @@ namespace Lotr.Updater.ViewModels
             {
                 _latest = await Task.Run(() => _svc.CheckAsync(status, CancellationToken.None));
                 ApplyCheck(_latest);
+                // A failed check may be a planned pause (battle night): the server then says so in /status.json.
+                if (_latest.Error != null && !_latest.RollbackOffered)
+                {
+                    var notice = await _svc.FetchServerNoticeAsync(CancellationToken.None);
+                    if (notice != null) ApplyNotice(notice);
+                }
                 if (_latest.Error == null) _ = LoadSiteNewsAsync();
                 if (_latest.Error == null && _latest.Plan.HasChanges && !userAsked)
                     await PreDownloadAsync();
@@ -366,6 +372,12 @@ namespace Lotr.Updater.ViewModels
                 var now = DateTime.UtcNow;
                 var start = EventSchedule.Next(now, _siteMusters).StartUtc;
                 _nextAutoCheckUtc = now.AddMinutes(start - now < TimeSpan.FromHours(12) ? 20 : 120);
+                // Paused by the server: look again just after the announced end (10 min to 2 h from now), else every 20 min.
+                if (Notice != null)
+                {
+                    var after = Notice.UntilUtc?.AddMinutes(2) ?? now.AddMinutes(20);
+                    _nextAutoCheckUtc = after < now.AddMinutes(10) ? now.AddMinutes(10) : after > now.AddMinutes(120) ? now.AddMinutes(120) : after;
+                }
             }
             if (_latest?.Plan != null && _latest.Plan.HasChanges && InTray && !_svc.State.PreDownload && _notifiedRelease != _latest.Manifest.ReleaseId)
             {
@@ -528,8 +540,41 @@ namespace Lotr.Updater.ViewModels
             catch (Exception ex) { _svc.Log.Error("Could not roll back the updater: " + ex.Message); }
         }
 
+        // ------------------------------------------------------------ server pause notice (event lock, 0.3.3)
+        private Core.News.ServerNotice _notice;
+        /// <summary>The server's pause notice while downloads are paused on purpose (battle night), else null.</summary>
+        public Core.News.ServerNotice Notice
+        {
+            get => _notice;
+            private set { if (Set(ref _notice, value)) { Raise(nameof(NoticeLinkText)); CommandRequery(); } }
+        }
+        /// <summary>Button text for the notice's link; null hides the button.</summary>
+        public string NoticeLinkText => Notice?.InstallUrl == null ? null
+            : Notice.InstallUrl.StartsWith("https://drive.google.com/", StringComparison.OrdinalIgnoreCase) ? "Get the mod from Google Drive" : "Get the mod";
+        private RelayCommand _openNoticeLinkCmd;
+        public RelayCommand OpenNoticeLinkCommand => _openNoticeLinkCmd ?? (_openNoticeLinkCmd = new RelayCommand(OpenNoticeLink, () => Notice?.InstallUrl != null));
+
+        private void ApplyNotice(Core.News.ServerNotice n)
+        {
+            Notice = n;
+            StatusErrorDetail = null;   // a planned pause, not a problem to report
+            StatusTitle = n.Title;
+            StatusDetail = n.UntilText() == null ? n.Message : n.Message + "\n\n" + n.UntilText();
+            StatusKind = "paused";
+        }
+
+        /// <summary>Opens the notice's link, already restricted to the LotR server or ServerNotice.LinkHosts (https).</summary>
+        private void OpenNoticeLink()
+        {
+            var url = Core.News.ServerNotice.SafeLink(Notice?.InstallUrl, _svc.Config.BaseUrl);
+            if (url == null) return;
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose(); }
+            catch (Exception ex) { _svc.Log.Warn(ex.Message); }
+        }
+
         private void ApplyCheck(CheckResult r)
         {
+            Notice = null;
             LastCheck = "Last check " + DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
             RollbackOffered = r.RollbackOffered;
             StatusErrorDetail = null;
@@ -1234,6 +1279,16 @@ namespace Lotr.Updater.ViewModels
                 HomeLede = "Comparing your mod files with the server. This takes a few seconds.";
                 SealKind = "wait"; SealTitle = "···"; SealSub = "checking";
             }
+            else if (StatusKind == "paused" && HasGame)
+            {
+                // Battle night: the server paused downloads on purpose. Nothing is wrong on this PC; Play as usual.
+                stage = -1;
+                HomeEyebrow = "BATTLE IN PROGRESS";
+                HomeTitle = StatusTitle;
+                HomeLede = StatusDetail;
+                SealKind = Busy ? "wait" : "play"; SealTitle = "PLAY"; SealSub = null;
+                SealCaption = "Already up to date? Play as usual.";
+            }
             else
             {
                 // Could not check, older release offered, or no game folder: the same words as before, and the way out.
@@ -1257,7 +1312,7 @@ namespace Lotr.Updater.ViewModels
             OfferTick = StatusKind == "ok" && !_installing && ShowLauncherCard && LauncherStatusKind != "ok";
             HomeLauncherResult = StatusKind == "ok" && !_installing ? _launcherMessage : null;
             HomeWarning = HasGame ? GameNote : null;
-            CanCheckAgain = HasGame && StatusKind == "error" && !Busy;
+            CanCheckAgain = HasGame && (StatusKind == "error" || StatusKind == "paused") && !Busy;
             CommandRequery();
         }
 

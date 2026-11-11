@@ -128,6 +128,9 @@
                     <TextBlock Text="{Binding HomeTitle}" FontFamily="{StaticResource DisplayFont}" FontSize="44" Foreground="{StaticResource GoldGradient}" TextWrapping="Wrap" Margin="0,6,0,0" LineHeight="52"/>
                     <TextBlock Text="{Binding HomeLede}" Style="{StaticResource Body}" FontSize="19" LineHeight="26" Foreground="{StaticResource Parchment}" Margin="0,10,0,0" MaxWidth="500" HorizontalAlignment="Left"
                                Visibility="{Binding HomeLede, Converter={StaticResource Vis}}"/>
+                    <!-- server pause notice (battle night): where to get the mod meanwhile -->
+                    <Button Command="{Binding OpenNoticeLinkCommand}" Content="{Binding NoticeLinkText}" Margin="0,16,0,0" Padding="20,10" HorizontalAlignment="Left"
+                            Visibility="{Binding NoticeLinkText, Converter={StaticResource Vis}}"/>
 
                     <!-- error report (begin) -->
                     <StackPanel Visibility="{Binding StatusErrorDetail, Converter={StaticResource Vis}}" Margin="0,12,0,0">

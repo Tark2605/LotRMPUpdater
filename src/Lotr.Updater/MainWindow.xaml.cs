@@ -189,7 +189,7 @@ namespace Lotr.Updater
             {
                 File.AppendAllText(xml, "<!-- edited by hand -->");
                 // .NET Framework refuses ':' in paths: let cmd write the alternate data stream, as a browser download would.
-                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c echo [ZoneTransfer]>\"" + xml + ":Zone.Identifier\"") { CreateNoWindow = true, UseShellExecute = false };
+                var psi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c echo [ZoneTransfer]>\"" + xml + ":Zone.Identifier\"") { CreateNoWindow = true, UseShellExecute = false };
                 System.Diagnostics.Process.Start(psi)?.WaitForExit(5000);
             }
             _vm.Page = Page.Verify;

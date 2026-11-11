@@ -15,11 +15,22 @@ function newToken() {
     return `q_${crypto.randomBytes(24).toString('base64url')}`;
 }
 
+
+// The address a limit applies to: IPv4 as is, IPv6 by its /64 (one home network gets a whole /64).
+function ipKey(ip) {
+    if (!ip) return '';
+    const v = String(ip).replace(/^::ffff:/i, '');
+    if (!v.includes(':')) return v;
+    const head = v.split('::')[0].split(':');
+    const full = v.includes('::') ? head.concat(Array(8).fill('0')).slice(0, 4) : v.split(':').slice(0, 4);
+    return full.map((h) => (h || '0').toLowerCase().replace(/^0+(?=.)/, '')).join(':') + '::/64';
+}
+
 class DownloadQueue {
     constructor(options, { now = () => Date.now(), onChange = () => {}, logger = null } = {}) {
         this.opts = {
             kinds: ['core'], maxConcurrent: 40, slotTtlSec: 180, waitTtlSec: 90,
-            retryAfterMinSec: 5, retryAfterMaxSec: 60, maxWaitingPerIp: 6, ...options,
+            retryAfterMinSec: 5, retryAfterMaxSec: 60, maxWaitingPerIp: 6, maxActivePerIp: 3, ...options,
         };
         this.now = now;
         this.onChange = onChange;
@@ -79,6 +90,16 @@ class DownloadQueue {
             slot.expiresAt = t + ttl;
             this.onChange();
             return { granted: true, token: existing, expiresAt: slot.expiresAt, reused: true };
+        }
+
+        // One address may not hold every slot with made-up install ids: a few at most (a household), the rest wait.
+        const net = ipKey(ip);
+        if (net && this.opts.maxActivePerIp > 0) {
+            let held = 0;
+            for (const s of st.active.values()) if (ipKey(s.ip) === net) held++;
+            if (held >= this.opts.maxActivePerIp) {
+                return { granted: false, position: null, retryAfter: this.opts.retryAfterMaxSec, reason: 'too_many_active_from_ip' };
+            }
         }
 
         const free = this.opts.maxConcurrent - st.active.size;
@@ -194,4 +215,4 @@ class DownloadQueue {
     }
 }
 
-module.exports = { DownloadQueue, CLIENT_PATTERN };
+module.exports = { DownloadQueue, CLIENT_PATTERN, ipKey };

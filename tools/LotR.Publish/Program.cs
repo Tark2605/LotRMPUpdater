@@ -25,14 +25,17 @@ Locations (pick one style):
   --pub <file.pem>           trusted public key (repeatable; default: the key's own public part)
 
 Commands:
-  init-key   [--root R | --out <key>] [--pub-out <pem>] [--protection dpapi|plain] [--grant <account>|current]...
+  init-key   [--root R | --out <key>] [--pub-out <pem>] [--protection dpapi|dpapi-user|plain] [--grant <account>|current]...
              [--no-acl] [--force]
   show-key   (--key <file> | --pub <pem>)                 prints keyId and fingerprint
-  export-key [--root R | --key <file>] --out <file> [--protection plain|dpapi] [--grant ..] [--no-acl] [--force]
-             copies the SAME key (backup to offline media = plain; restore on a server = dpapi)
+  export-key [--root R | --key <file>] [--out <file>] [--protection plain|dpapi|dpapi-user] [--grant ..] [--no-acl] [--force]
+             copies the SAME key (backup to offline media = plain; a server = dpapi; a team member's PC = dpapi-user,
+             default --out %USERPROFILE%\.lotrmp\release-signing.key) and reads it back
   plan       <modules> [--channel stable] [--exact] [--json]           dry run: diff vs the channel's release
   publish    <modules> [--channel stable] [--notes ""text""] [--note fr=...] [--by admin-panel:name]
              [--game-min v1.2.12] [--game-max v..] [--base-url https://domain] [--no-channel] [--no-verify] [--scan] [--json]
+             [--pending]  no key on this machine: written + verified but NOT signed, channel unchanged, pending.json
+                          names it until a team PC signs it (docs/TEAM-SIGNING.md)
   verify     <releaseDir> [--pub ..] [--json]              signature + every object decoded and hashed
   set-channel <channel> <releaseId>                         point a channel (rollback); checks the signature
   scan       <releaseDir> [--updater-exe <exe>] [--source-modules <dir>] [--script <Invoke-ReleaseScans.ps1>]
@@ -43,7 +46,20 @@ Commands:
   publish-updater --exe <LotRMPUpdater.exe> [--root R | --updater-dir <files\updater>] [--channel stable]
              [--version 1.2.3] [--base-url https://domain] [--key <file>] [--no-sign] [--force] [--json]
              writes LotRMPUpdater-<version>.exe + .sha256 + latest.json (latest-<channel>.json for other channels),
-             each atomically, latest.json last; latest.json.sig with the release key (default: the --root key)
+             each atomically, latest.json last; latest.json.sig with the release key (default: the --root key, else
+             the PC key %USERPROFILE%\.lotrmp\release-signing.key)
+
+Team signing (docs/TEAM-SIGNING.md): the release key stays on team members' PCs, the server only verifies.
+  pending    [--root R] [--json]                           the release waiting for the team signature, if any
+  sign-release --from <https://domain | releasesDir> --out <signedDir> [--release <id>] [--channel stable]
+             [--modules-root <dir>]... [--module <Folder>=<dir>]... [--base-url https://domain] [--key <file>] [--pub ..]
+             [--yes] [--json]
+             PC side: fetches the pending manifest and the live release, checks that the live one carries our signature
+             and every changed module file by file against the local folders, asks, signs
+             -> <signedDir>\releases\<id>\manifest.json.sig. Exit 0 also when nothing is pending; 1 refused; 3 declined.
+  apply-signed --from <signedDir> [--root R] [--pub ..] [--force] [--json]
+             server side: installs <signedDir>\updater\ (signed latest.json + exe; never a downgrade) and
+             <signedDir>\releases\<id>\manifest.json.sig (verified, whole release re-verified, channel moved)
 
 <modules>: --event <dir> [--core <dir>] [--admin-client <dir>] [--workshop event=3774022783] [--exclude <glob>]
 Common: --threads N (default min(cores,8))
@@ -84,6 +100,9 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                     case "export-site-json": return ExportSite(a);
                     case "verify-install": return VerifyInstall(a);
                     case "publish-updater": return PublishUpdater(a);
+                    case "pending": return Pending(a);
+                    case "sign-release": return TeamCommands.SignRelease(a);
+                    case "apply-signed": return TeamCommands.ApplySigned(a);
                     default:
                         Console.Error.WriteLine("unknown command '" + args[0] + "'\n\n" + Usage);
                         return 2;
@@ -110,16 +129,11 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
 
         private static int InitKey(Args a)
         {
-            string keyPath = a.One("out") ?? (a.Root != null ? a.DefaultKey : throw new UsageException("give --out <file> or --root <deployRoot>"));
+            var protection = Protection(a, KeyProtection.DpapiMachine);
+            string keyPath = a.One("out") ?? (a.Root != null ? a.DefaultKey : protection == KeyProtection.DpapiUser ? KeyStore.DefaultPcKeyPath : throw new UsageException("give --out <file> or --root <deployRoot>"));
             string pubPath = a.One("pub-out") ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(keyPath)), Path.GetFileNameWithoutExtension(keyPath) + ".pub.pem");
-            var protection = (a.One("protection") ?? "dpapi") switch
-            {
-                "dpapi" => KeyProtection.DpapiMachine,
-                "plain" => KeyProtection.Plain,
-                var p => throw new UsageException("--protection must be dpapi or plain, not " + p),
-            };
             bool acl = !a.Flag("no-acl");
-            if (acl && !KeyStore.IsElevated() && !a.Many("grant").Any())
+            if (acl && protection != KeyProtection.DpapiUser && !KeyStore.IsElevated() && !a.Many("grant").Any())
             {
                 Console.Error.WriteLine("warning: not elevated and no --grant: you will not be able to read the key back without elevation.");
             }
@@ -129,11 +143,11 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 KeyStore.Save(keyPath, key, protection, acl, a.Many("grant"), a.Flag("force"));
                 byte[] spki = EcKeys.ExportSpki(key);
                 AtomicFile.Write(pubPath, Encoding.ASCII.GetBytes(EcKeys.ToPem("PUBLIC KEY", spki)));
-                Console.WriteLine("private key : " + Path.GetFullPath(keyPath) + " (" + (protection == KeyProtection.DpapiMachine ? "DPAPI machine scope" : "plain PKCS#8") + (acl ? ", ACL Administrators+SYSTEM" + string.Concat(a.Many("grant").Select(g => "+" + g)) : ", inherited ACL") + ")");
+                Console.WriteLine("private key : " + Path.GetFullPath(keyPath) + " (" + KeyStore.Describe(protection) + (acl ? (protection == KeyProtection.DpapiUser ? ", ACL this account+SYSTEM" : ", ACL Administrators+SYSTEM") + string.Concat(a.Many("grant").Select(g => "+" + g)) : ", inherited ACL") + ")");
                 Console.WriteLine("public key  : " + Path.GetFullPath(pubPath));
                 Console.WriteLine("keyId       : " + EcKeys.KeyId(spki));
                 Console.WriteLine("fingerprint : " + EcKeys.Fingerprint(spki));
-                Console.WriteLine("Back up the private key offline (init-key --protection plain to a USB stick, or export before rotation).");
+                Console.WriteLine("Back up the private key offline (export-key --protection plain, then a password manager or paper; see docs/TEAM-SIGNING.md).");
             }
 
             return 0;
@@ -142,14 +156,58 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
         private static int ExportKey(Args a)
         {
             string src = a.One("key") ?? a.DefaultKey ?? throw new UsageException("give --key <file> or --root");
-            string dst = a.One("out") ?? throw new UsageException("--out <file>");
-            var protection = (a.One("protection") ?? "plain") == "dpapi" ? KeyProtection.DpapiMachine : KeyProtection.Plain;
-            using (var key = KeyStore.Load(src))
+            var protection = Protection(a, KeyProtection.Plain);
+            string dst = a.One("out") ?? (protection == KeyProtection.DpapiUser ? KeyStore.DefaultPcKeyPath : throw new UsageException("--out <file>"));
+            // A plain export is a file to move (Remote Desktop copy-paste) or back up: without a grant it would be readable
+            // by elevated processes only, and Explorer/clipboard copies (never elevated) are refused. Grant this account.
+            var grants = a.Many("grant").ToList();
+            if (protection == KeyProtection.Plain && grants.Count == 0 && !a.Flag("no-acl"))
             {
-                KeyStore.Save(dst, key, protection, !a.Flag("no-acl"), a.Many("grant"), a.Flag("force"));
-                Console.WriteLine("exported " + EcKeys.Fingerprint(EcKeys.ExportSpki(key)) + " to " + Path.GetFullPath(dst) + " (" + (protection == KeyProtection.Plain ? "plain PKCS#8: keep it OFFLINE" : "DPAPI machine scope") + ")");
+                grants.Add("current");
             }
 
+            using (var key = KeyStore.Load(src))
+            {
+                byte[] spki = EcKeys.ExportSpki(key);
+                KeyStore.Save(dst, key, protection, !a.Flag("no-acl"), grants, a.Flag("force"));
+                Console.WriteLine("exported " + EcKeys.Fingerprint(spki) + " to " + Path.GetFullPath(dst) + " (" + (protection == KeyProtection.Plain ? "plain PKCS#8: keep it OFFLINE" : KeyStore.Describe(protection)) + ")");
+                Console.WriteLine("keyId       : " + EcKeys.KeyId(spki));
+                using (var back = KeyStore.Load(dst))
+                {
+                    if (!EcKeys.ExportSpki(back).SequenceEqual(spki))
+                    {
+                        throw new InvalidOperationException("read-back check failed: " + dst + " does not hold the same key");
+                    }
+                }
+
+                Console.WriteLine("read back   : OK (same key)");
+            }
+
+            return 0;
+        }
+
+        private static KeyProtection Protection(Args a, KeyProtection fallback)
+        {
+            try
+            {
+                return KeyStore.ParseProtection(a.One("protection"), fallback);
+            }
+            catch (ArgumentException e)
+            {
+                throw new UsageException(e.Message);
+            }
+        }
+
+        private static int Pending(Args a)
+        {
+            var p = PendingMarker.Read(a.Releases);
+            if (a.Flag("json"))
+            {
+                Console.Write(new JsonObject { ["pending"] = p?.ToJson() }.ToPrettyString());
+                return 0;
+            }
+
+            Console.WriteLine(p == null ? "nothing pending" : "pending     : " + p.ReleaseId + " (channel " + p.Channel + ", published " + p.PublishedAt + " by " + p.PublishedBy + ") - waiting for the team signature");
             return 0;
         }
 
@@ -190,6 +248,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 Threads = a.Int("threads", Math.Min(Environment.ProcessorCount, 8)),
                 UpdateChannel = !a.Flag("no-channel"),
                 VerifyAfterPublish = !a.Flag("no-verify"),
+                Pending = needKeys && a.Flag("pending"),
             };
 
             var workshop = a.Many("workshop").Select(w => w.Split(new[] { '=' }, 2)).ToDictionary(p => p[0], p => p.Length > 1 ? p[1] : throw new UsageException("--workshop role=id"));
@@ -224,7 +283,19 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             }
 
             req.TrustedKeys.AddRange(a.Many("pub").Select(TrustedKey.FromPemFile));
-            if (needKeys)
+            if (needKeys && req.Pending)
+            {
+                if (a.Many("key").Any())
+                {
+                    throw new UsageException("--pending publishes without a key: drop --key");
+                }
+
+                if (a.DefaultPub != null && File.Exists(a.DefaultPub))
+                {
+                    req.TrustedKeys.Add(TrustedKey.FromPemFile(a.DefaultPub));
+                }
+            }
+            else if (needKeys)
             {
                 var keys = a.Many("key").ToList();
                 if (keys.Count == 0 && a.DefaultKey != null)
@@ -305,6 +376,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                         ["releaseId"] = r.ReleaseId,
                         ["releaseDir"] = r.ReleaseDir,
                         ["channelUpdated"] = r.ChannelUpdated,
+                        ["pending"] = r.Pending,
                         ["writtenObjects"] = r.WrittenObjects,
                         ["writtenBytes"] = r.WrittenBytes,
                         ["linkedObjects"] = r.LinkedObjects,
@@ -328,7 +400,11 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                     Console.WriteLine("verify      : OK, " + r.Verification.ObjectsChecked + " objects decoded in " + r.Verification.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s");
                 }
 
-                Console.WriteLine("channel     : " + (r.ChannelUpdated ? req.Channel + " -> " + r.ReleaseId : "not changed (--no-channel)"));
+                Console.WriteLine("channel     : " + (r.ChannelUpdated ? req.Channel + " -> " + r.ReleaseId : r.Pending ? "not changed: waiting for the team signature (pending.json)" : "not changed (--no-channel)"));
+                if (r.Pending)
+                {
+                    Console.WriteLine("next        : on a team PC, TEAM-PUBLISH.cmd (lotr-publish sign-release) signs it; the signature comes back with the next site package");
+                }
                 Console.WriteLine("time        : " + r.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s");
                 if (a.Flag("scan"))
                 {
@@ -391,7 +467,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
 
         // ---------------------------------------------------------------- verify / channel / security / site
 
-        private static List<TrustedKey> Trusted(Args a)
+        internal static List<TrustedKey> Trusted(Args a)
         {
             var list = a.Many("pub").Select(TrustedKey.FromPemFile).ToList();
             if (list.Count == 0 && a.DefaultPub != null && File.Exists(a.DefaultPub))
@@ -553,7 +629,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             return null;
         }
 
-        private static string Quote(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
+        internal static string Quote(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
 
         private static int ExportSite(Args a)
         {
@@ -627,6 +703,11 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 if (keys.Count == 0 && a.DefaultKey != null && File.Exists(a.DefaultKey))
                 {
                     keys.Add(a.DefaultKey);
+                }
+
+                if (keys.Count == 0 && a.Root == null && File.Exists(KeyStore.DefaultPcKeyPath))
+                {
+                    keys.Add(KeyStore.DefaultPcKeyPath);
                 }
 
                 foreach (var k in keys)
@@ -714,7 +795,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
 
     internal sealed class Args
     {
-        private static readonly HashSet<string> Flags = new HashSet<string> { "exact", "json", "no-channel", "no-verify", "no-acl", "force", "quick", "scan", "no-sign"};
+        private static readonly HashSet<string> Flags = new HashSet<string> { "exact", "json", "no-channel", "no-verify", "no-acl", "force", "quick", "scan", "no-sign", "pending", "yes" };
         private readonly Dictionary<string, List<string>> named = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         private readonly List<string> positional = new List<string>();
 

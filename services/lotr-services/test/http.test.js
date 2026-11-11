@@ -108,6 +108,11 @@ test('forward_auth enforce: only objects of core modules need a slot (from the p
     assert.equal((await s.call('GET', '/internal/queue/check', uri('c'.repeat(64) + '.raw'))).status, 403, 'unknown object fails closed');
     const slot = await s.call('POST', '/api/queue/slot', { body: { client: 'install-aaaa' } });
     assert.equal((await s.call('GET', '/internal/queue/check', uri(core, `?slot=${slot.json.token}`))).status, 200);
+    // The file server is case-insensitive (NTFS) and decodes the path: neither trick may skip the slot.
+    const tricky = (p) => ({ headers: { 'x-forwarded-uri': p } });
+    assert.equal((await s.call('GET', '/internal/queue/check', tricky(`/files/releases/20261015-140000-a1b2c3d4/OBJECTS/${core.slice(0, 2)}/${core.toUpperCase()}`))).status, 403, 'upper case');
+    assert.equal((await s.call('GET', '/internal/queue/check', tricky(`/files/releases/20261015-140000-a1b2c3d4/%6Fbjects/${core.slice(0, 2)}/${core}`))).status, 403, 'percent-encoded');
+    assert.equal((await s.call('GET', '/internal/queue/check', tricky(`/files/releases/20261015-140000-a1b2c3d4/objects/%E0%A4%A/${core}`))).status, 403, 'undecodable');
 });
 
 test('forward_auth enforce: chunked files (index free, chunks core) and releases published after start', async (t) => {

@@ -157,16 +157,18 @@ namespace Lotr.Updater.Tests
         }
 
         [Fact]
-        public async Task Without_any_checkable_signature_the_new_exe_is_refused()
+        public async Task Unsigned_latest_json_is_refused_when_the_build_has_the_release_key()
         {
             using (var c = new Ctx())
             {
+                // Even with both exes Authenticode-signed by the team: Authenticode is an extra check, never a replacement
+                // for the release-key signature (its version and hash would otherwise be the server's word alone).
                 c.Publish("0.2.0", sign: false);
+                c.Auth.ByFileName["LotRMPUpdater.exe"] = FakeAuthenticode.SignedBy("CN=LotR MP Event team");
+                c.Auth.ByFileName["LotRMPUpdater-0.2.0.exe"] = FakeAuthenticode.SignedBy("CN=LotR MP Event team");
                 var su = c.Updater();
-                var offer = await su.CheckAsync("stable", null, CancellationToken.None);
-                Assert.False(offer.ReleaseKeySigned);
-                var ex = await Assert.ThrowsAsync<SelfUpdateException>(() => su.DownloadAsync(offer, null, CancellationToken.None));
-                Assert.Contains("neither", ex.Message);
+                var ex = await Assert.ThrowsAsync<SelfUpdateException>(() => su.CheckAsync("stable", null, CancellationToken.None));
+                Assert.Contains("not signed", ex.Message);
                 Assert.Null(su.Pending);
             }
         }

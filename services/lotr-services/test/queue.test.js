@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { DownloadQueue } = require('../src/queue');
+const { DownloadQueue, ipKey } = require('../src/queue');
 
 function clock(start = 1_800_000_000_000) {
     const c = { t: start, now: () => c.t, advance: (sec) => { c.t += sec * 1000; } };
@@ -136,4 +136,21 @@ test('client id validation', () => {
     assert.equal(DownloadQueue.validClient('short'), false);
     assert.equal(DownloadQueue.validClient('has space in it'), false);
     assert.equal(DownloadQueue.validClient(42), false);
+});
+
+test('one address cannot hold every slot with made-up install ids', () => {
+    const { q } = makeQueue({ maxConcurrent: 10, maxActivePerIp: 2 });
+    assert.equal(q.requestSlot({ kind: 'core', client: id(1), ip: '203.0.113.5' }).granted, true);
+    assert.equal(q.requestSlot({ kind: 'core', client: id(2), ip: '203.0.113.5' }).granted, true);
+    const third = q.requestSlot({ kind: 'core', client: id(3), ip: '203.0.113.5' });
+    assert.equal(third.granted, false);
+    assert.equal(third.reason, 'too_many_active_from_ip');
+    // Same /64 in IPv6 counts as one address; another address still gets a slot.
+    assert.equal(q.requestSlot({ kind: 'core', client: id(4), ip: '2001:db8:0:1::10' }).granted, true);
+    assert.equal(q.requestSlot({ kind: 'core', client: id(5), ip: '2001:db8:0:1::20' }).granted, true);
+    assert.equal(q.requestSlot({ kind: 'core', client: id(6), ip: '2001:db8:0:1:ffff::1' }).granted, false);
+    assert.equal(q.requestSlot({ kind: 'core', client: id(7), ip: '198.51.100.7' }).granted, true);
+    // The slot already held is refreshed, never refused.
+    assert.equal(q.requestSlot({ kind: 'core', client: id(1), ip: '203.0.113.5' }).granted, true);
+    assert.equal(ipKey('::ffff:203.0.113.5'), '203.0.113.5');
 });

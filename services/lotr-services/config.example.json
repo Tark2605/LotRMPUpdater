@@ -19,6 +19,7 @@
     "retryAfterMinSec": 5,
     "retryAfterMaxSec": 60,
     "maxWaitingPerIp": 6,
+    "maxActivePerIp": 3,
     "enforcement": "advisory",
     "_stateFile": "defaults to <dataDir>\\lotr-services\\queue-state.json",
     "_releasesDir": "defaults to <root>\\files\\releases (the manifests tell which objects belong to role core modules)"

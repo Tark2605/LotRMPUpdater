@@ -35,7 +35,11 @@ namespace LotR.Releases.Publishing
 
         public TimeSpan Elapsed { get; set; }
 
-        public bool Ok => Errors.Count == 0 && Signature != null && Signature.Valid;
+        /// <summary>True when the release was checked without requiring a signature (pending team signature).</summary>
+        public bool SignatureOptional { get; set; }
+
+        /// <summary>Content OK (and signature OK, unless checked as a pending release).</summary>
+        public bool Ok => Errors.Count == 0 && Signature != null && (Signature.Valid || SignatureOptional);
     }
 
     /// <summary>
@@ -45,10 +49,10 @@ namespace LotR.Releases.Publishing
     /// </summary>
     public static class ReleaseVerifier
     {
-        public static ReleaseVerification Verify(string releaseDir, IEnumerable<TrustedKey> trusted, int threads = 4, IProgress<string> log = null)
+        public static ReleaseVerification Verify(string releaseDir, IEnumerable<TrustedKey> trusted, int threads = 4, IProgress<string> log = null, bool signatureRequired = true)
         {
             var sw = Stopwatch.StartNew();
-            var report = new ReleaseVerification { ReleaseId = Path.GetFileName(Path.GetFullPath(releaseDir).TrimEnd('\\', '/')) };
+            var report = new ReleaseVerification { ReleaseId = Path.GetFileName(Path.GetFullPath(releaseDir).TrimEnd('\\', '/')), SignatureOptional = !signatureRequired };
             ReleaseFolder rel;
             try
             {
@@ -62,9 +66,11 @@ namespace LotR.Releases.Publishing
             }
 
             report.Signature = rel.SignatureBytes == null
-                ? new SignatureCheck { Valid = false, Message = "manifest.json.sig is missing" }
+                ? new SignatureCheck { Valid = false, Message = signatureRequired ? "manifest.json.sig is missing" : "not signed yet (pending the team signature)" }
                 : ManifestSignature.Verify(rel.ManifestBytes, rel.SignatureBytes, trusted);
-            if (!report.Signature.Valid)
+            // A pending release (published by a server without the key, docs/TEAM-SIGNING.md) is checked for everything
+            // but the signature; a signature that IS there must still verify.
+            if (!report.Signature.Valid && (signatureRequired || rel.SignatureBytes != null))
             {
                 report.Errors.Add("signature: " + report.Signature.Message);
             }
