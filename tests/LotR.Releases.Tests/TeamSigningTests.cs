@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using LotR.Releases.Hashing;
 using LotR.Releases.Model;
@@ -419,6 +420,75 @@ namespace LotR.Releases.Tests
 
                 Assert.Equal(KeyProtection.DpapiUser, KeyStore.ParseProtection("dpapi-user", KeyProtection.Plain));
                 Assert.Throws<ArgumentException>(() => KeyStore.ParseProtection("usb", KeyProtection.Plain));
+            }
+        }
+
+        // ------------------------------------------------------------------------------------ passphrase backup
+
+        [Theory]
+        // RFC 7914 §11 (PBKDF2-HMAC-SHA256 test vectors).
+        [InlineData("passwd", "salt", 1, "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")]
+        [InlineData("Password", "NaCl", 80000, "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d")]
+        public void Pbkdf2_matches_the_rfc_vectors(string password, string salt, int iterations, string hex)
+        {
+            byte[] dk = PassphraseBox.Pbkdf2Sha256(Encoding.UTF8.GetBytes(password), Encoding.UTF8.GetBytes(salt), iterations, 64);
+            Assert.Equal(hex, BitConverter.ToString(dk).Replace("-", string.Empty).ToLowerInvariant());
+        }
+
+#if NET8_0_OR_GREATER
+        [Fact]
+        public void Pbkdf2_matches_the_framework_implementation()
+        {
+            byte[] salt = Encoding.UTF8.GetBytes("LotR salt 0123456789");
+            byte[] mine = PassphraseBox.Pbkdf2Sha256(Encoding.UTF8.GetBytes("mellon"), salt, 4096, 64);
+            byte[] theirs = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes("mellon"), salt, 4096, HashAlgorithmName.SHA256, 64);
+            Assert.Equal(theirs, mine);
+        }
+#endif
+
+        [Fact]
+        public void Passphrase_backup_round_trips_and_refuses_wrong_passphrase_tampering_and_weak_passphrases()
+        {
+            const string pass = "the white tree of gondor blooms again";
+            using (var t = new TempDir("lotr-team-backup-"))
+            using (var key = EcKeys.Generate())
+            {
+                string path = t.Sub("release-signing.backup.key");
+                KeyStore.Save(path, key, KeyProtection.Passphrase, applyAcl: true, passphrase: pass);
+                string pem = File.ReadAllText(path);
+                Assert.Contains("BEGIN " + KeyStore.PassphraseLabel, pem);
+                Assert.DoesNotContain("BEGIN PRIVATE KEY", pem);
+                using (var back = KeyStore.Load(path, pass))
+                {
+                    Assert.Equal(EcKeys.ExportSpki(key), EcKeys.ExportSpki(back));
+                }
+
+                // Wrong passphrase, and no passphrase at all (a library/service never prompts).
+                var wrong = Assert.Throws<CryptographicException>(() => KeyStore.Load(path, pass + "!"));
+                Assert.Contains("wrong passphrase", wrong.Message);
+                var saved = KeyStore.PassphraseProvider;
+                KeyStore.PassphraseProvider = null;
+                try
+                {
+                    Assert.Throws<CryptographicException>(() => KeyStore.Load(path));
+                }
+                finally
+                {
+                    KeyStore.PassphraseProvider = saved;
+                }
+
+                // One flipped bit anywhere in the box is caught by the MAC.
+                byte[] box = EcKeys.FromPem(pem, KeyStore.PassphraseLabel);
+                box[box.Length / 2] ^= 1;
+                var tampered = Assert.Throws<CryptographicException>(() => PassphraseBox.Open(box, pass));
+                Assert.Contains("wrong passphrase", tampered.Message);
+
+                // Two backups of the same key never share salt/iv (no ciphertext repeats).
+                Assert.NotEqual(Convert.ToBase64String(PassphraseBox.Seal(new byte[] { 1, 2, 3 }, pass, 1000)), Convert.ToBase64String(PassphraseBox.Seal(new byte[] { 1, 2, 3 }, pass, 1000)));
+
+                Assert.Throws<ArgumentException>(() => KeyStore.Save(t.Sub("weak.key"), key, KeyProtection.Passphrase, applyAcl: false, passphrase: "short"));
+                Assert.False(File.Exists(t.Sub("weak.key")));
+                Assert.Equal(KeyProtection.Passphrase, KeyStore.ParseProtection("passphrase", KeyProtection.Plain));
             }
         }
     }

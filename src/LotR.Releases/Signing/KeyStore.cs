@@ -22,6 +22,12 @@ namespace LotR.Releases.Signing
         /// The file ACL is the account itself + SYSTEM.
         /// </summary>
         DpapiUser,
+
+        /// <summary>
+        /// PKCS#8 encrypted with a passphrase the owner chooses (PassphraseBox): the OFFLINE BACKUP of a team key. Portable
+        /// (any PC, any account) and safe to keep in a cloud drive, as long as the passphrase never travels with it.
+        /// </summary>
+        Passphrase,
     }
 
     /// <summary>
@@ -38,11 +44,21 @@ namespace LotR.Releases.Signing
         public const string DpapiLabel = "LOTR DPAPI PRIVATE KEY";
         public const string DpapiUserLabel = "LOTR DPAPI USER PRIVATE KEY";
         public const string PlainLabel = "PRIVATE KEY";
+        public const string PassphraseLabel = "LOTR PASSPHRASE PRIVATE KEY";
+
+        /// <summary>
+        /// Asks for the passphrase of a passphrase-protected key: (path, confirmTwice) -> passphrase. Set by the command line
+        /// tool (hidden console prompt); left null in a library or service, where such a key is refused.
+        /// </summary>
+        public static Func<string, bool, string> PassphraseProvider;
 
         /// <summary>Where a team member's PC keeps its release key: %USERPROFILE%\.lotrmp\release-signing.key (DpapiUser).</summary>
         public static string DefaultPcKeyPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".lotrmp", "release-signing.key");
 
-        public static string Describe(KeyProtection p) => p == KeyProtection.DpapiMachine ? "DPAPI machine scope" : p == KeyProtection.DpapiUser ? "DPAPI current-user scope (this account on this PC only)" : "plain PKCS#8";
+        /// <summary>Default place of the passphrase-protected backup: %USERPROFILE%\.lotrmp\release-signing.backup.key.</summary>
+        public static string DefaultPcBackupPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".lotrmp", "release-signing.backup.key");
+
+        public static string Describe(KeyProtection p) => p == KeyProtection.DpapiMachine ? "DPAPI machine scope" : p == KeyProtection.DpapiUser ? "DPAPI current-user scope (this account on this PC only)" : p == KeyProtection.Passphrase ? "passphrase-encrypted backup (AES-256, PBKDF2-SHA256)" : "plain PKCS#8";
 
         public static KeyProtection ParseProtection(string text, KeyProtection fallback)
         {
@@ -52,13 +68,24 @@ namespace LotR.Releases.Signing
                 case "dpapi": return KeyProtection.DpapiMachine;
                 case "dpapi-user": return KeyProtection.DpapiUser;
                 case "plain": return KeyProtection.Plain;
-                default: throw new ArgumentException("--protection must be dpapi (server), dpapi-user (a team member's PC) or plain (offline backup), not " + text);
+                case "passphrase": return KeyProtection.Passphrase;
+                default: throw new ArgumentException("--protection must be dpapi (server), dpapi-user (a team member's PC), passphrase (backup) or plain (transfer), not " + text);
             }
         }
         private static readonly byte[] Entropy = Encoding.ASCII.GetBytes("LotRMPEvent release signing key v1");
 
-        public static void Save(string path, ECDsa key, KeyProtection protection, bool applyAcl, IEnumerable<string> extraAccounts = null, bool overwrite = false)
+        public static void Save(string path, ECDsa key, KeyProtection protection, bool applyAcl, IEnumerable<string> extraAccounts = null, bool overwrite = false, string passphrase = null)
         {
+            if (protection == KeyProtection.Passphrase)
+            {
+                passphrase = passphrase ?? PassphraseProvider?.Invoke(path, true) ?? throw new InvalidOperationException("a passphrase-protected key needs a passphrase");
+                string why = PassphraseBox.CheckPassphrase(passphrase);
+                if (why != null)
+                {
+                    throw new ArgumentException(why);
+                }
+            }
+
             if (File.Exists(path) && !overwrite)
             {
                 throw new IOException("Refusing to overwrite the existing key " + path + " (use --force, after a backup: every published release is signed with it)");
@@ -74,7 +101,9 @@ namespace LotR.Releases.Signing
                     ? EcKeys.ToPem(DpapiLabel, ProtectedData.Protect(pkcs8, Entropy, DataProtectionScope.LocalMachine))
                     : protection == KeyProtection.DpapiUser
                         ? EcKeys.ToPem(DpapiUserLabel, ProtectedData.Protect(pkcs8, Entropy, DataProtectionScope.CurrentUser))
-                        : EcKeys.ToPem(PlainLabel, pkcs8);
+                        : protection == KeyProtection.Passphrase
+                            ? EcKeys.ToPem(PassphraseLabel, PassphraseBox.Seal(pkcs8, passphrase))
+                            : EcKeys.ToPem(PlainLabel, pkcs8);
             }
             finally
             {
@@ -84,7 +113,8 @@ namespace LotR.Releases.Signing
             // Create the file empty, lock it down, then write: the secret never sits under an inherited ACL.
             string tmp = path + ".new";
             File.WriteAllText(tmp, string.Empty);
-            bool userKey = protection == KeyProtection.DpapiUser;
+            // The account's own key and its passphrase backup stay readable by that account (it copies the backup away).
+            bool userKey = protection == KeyProtection.DpapiUser || protection == KeyProtection.Passphrase;
             if (applyAcl)
             {
                 // Phase 1: protected ACL that still lets this process write; phase 2: the final ACL.
@@ -107,9 +137,23 @@ namespace LotR.Releases.Signing
             }
         }
 
-        public static ECDsa Load(string path)
+        public static ECDsa Load(string path, string passphrase = null)
         {
             string pem = File.ReadAllText(path);
+            if (EcKeys.HasPem(pem, PassphraseLabel))
+            {
+                passphrase = passphrase ?? PassphraseProvider?.Invoke(path, false) ?? throw new CryptographicException(path + " is a passphrase-protected backup: restore it first with lotr-publish export-key --key <backup> --protection dpapi-user");
+                byte[] pkcs8 = PassphraseBox.Open(EcKeys.FromPem(pem, PassphraseLabel), passphrase);
+                try
+                {
+                    return EcKeys.ImportPkcs8(pkcs8);
+                }
+                finally
+                {
+                    Array.Clear(pkcs8, 0, pkcs8.Length);
+                }
+            }
+
             if (EcKeys.HasPem(pem, DpapiUserLabel))
             {
                 byte[] pkcs8;

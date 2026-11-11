@@ -28,7 +28,8 @@ Commands:
   init-key   [--root R | --out <key>] [--pub-out <pem>] [--protection dpapi|dpapi-user|plain] [--grant <account>|current]...
              [--no-acl] [--force]
   show-key   (--key <file> | --pub <pem>)                 prints keyId and fingerprint
-  export-key [--root R | --key <file>] [--out <file>] [--protection plain|dpapi|dpapi-user] [--grant ..] [--no-acl] [--force]
+  export-key [--root R | --key <file>] [--out <file>] [--protection plain|dpapi|dpapi-user|passphrase] [--grant ..] [--no-acl] [--force]
+             passphrase = the offline backup (asks it twice, hidden; default %USERPROFILE%\.lotrmpelease-signing.backup.key)
              copies the SAME key (backup to offline media = plain; a server = dpapi; a team member's PC = dpapi-user,
              default --out %USERPROFILE%\.lotrmp\release-signing.key) and reads it back
   plan       <modules> [--channel stable] [--exact] [--json]           dry run: diff vs the channel's release
@@ -68,6 +69,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
         private static int Main(string[] args)
         {
             Console.OutputEncoding = new UTF8Encoding(false);
+            KeyStore.PassphraseProvider = AskPassphrase;
             if (args.Length == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help")
             {
                 Console.WriteLine(Usage);
@@ -147,7 +149,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 Console.WriteLine("public key  : " + Path.GetFullPath(pubPath));
                 Console.WriteLine("keyId       : " + EcKeys.KeyId(spki));
                 Console.WriteLine("fingerprint : " + EcKeys.Fingerprint(spki));
-                Console.WriteLine("Back up the private key offline (export-key --protection plain, then a password manager or paper; see docs/TEAM-SIGNING.md).");
+                Console.WriteLine("Back up the private key: export-key --protection passphrase (see docs/TEAM-SIGNING.md).");
             }
 
             return 0;
@@ -157,7 +159,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
         {
             string src = a.One("key") ?? a.DefaultKey ?? throw new UsageException("give --key <file> or --root");
             var protection = Protection(a, KeyProtection.Plain);
-            string dst = a.One("out") ?? (protection == KeyProtection.DpapiUser ? KeyStore.DefaultPcKeyPath : throw new UsageException("--out <file>"));
+            string dst = a.One("out") ?? (protection == KeyProtection.DpapiUser ? KeyStore.DefaultPcKeyPath : protection == KeyProtection.Passphrase ? KeyStore.DefaultPcBackupPath : throw new UsageException("--out <file>"));
             // A plain export is a file to move (Remote Desktop copy-paste) or back up: without a grant it would be readable
             // by elevated processes only, and Explorer/clipboard copies (never elevated) are refused. Grant this account.
             var grants = a.Many("grant").ToList();
@@ -169,10 +171,12 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             using (var key = KeyStore.Load(src))
             {
                 byte[] spki = EcKeys.ExportSpki(key);
-                KeyStore.Save(dst, key, protection, !a.Flag("no-acl"), grants, a.Flag("force"));
+                // Asked once (typed twice) and reused for the read-back below.
+                string passphrase = protection == KeyProtection.Passphrase ? AskPassphrase(dst, true) : null;
+                KeyStore.Save(dst, key, protection, !a.Flag("no-acl"), grants, a.Flag("force"), passphrase);
                 Console.WriteLine("exported " + EcKeys.Fingerprint(spki) + " to " + Path.GetFullPath(dst) + " (" + (protection == KeyProtection.Plain ? "plain PKCS#8: keep it OFFLINE" : KeyStore.Describe(protection)) + ")");
                 Console.WriteLine("keyId       : " + EcKeys.KeyId(spki));
-                using (var back = KeyStore.Load(dst))
+                using (var back = KeyStore.Load(dst, passphrase))
                 {
                     if (!EcKeys.ExportSpki(back).SequenceEqual(spki))
                     {
@@ -184,6 +188,72 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// Hidden console prompt for a passphrase-protected backup (KeyStore.PassphraseProvider). Never a command line
+        /// argument: it would stay in the shell history and in the process list. Piped input is accepted (one line, typed
+        /// twice when confirming) so the flow can be scripted in tests.
+        /// </summary>
+        internal static string AskPassphrase(string path, bool confirm)
+        {
+            string first = ReadSecret("Passphrase for " + Path.GetFileName(path) + ": ");
+            if (confirm)
+            {
+                string why = PassphraseBox.CheckPassphrase(first);
+                if (why != null)
+                {
+                    throw new UsageException(why);
+                }
+
+                if (ReadSecret("Type it again: ") != first)
+                {
+                    throw new UsageException("the two passphrases differ; nothing was written");
+                }
+            }
+
+            return first;
+        }
+
+        private static string ReadSecret(string prompt)
+        {
+            Console.Error.Write(prompt);
+            if (Console.IsInputRedirected)
+            {
+                string line = Console.In.ReadLine() ?? string.Empty;
+                Console.Error.WriteLine();
+                return line;
+            }
+
+            var sb = new StringBuilder();
+            while (true)
+            {
+                var k = Console.ReadKey(intercept: true);
+                if (k.Key == ConsoleKey.Enter)
+                {
+                    break;
+                }
+
+                if (k.Key == ConsoleKey.Backspace)
+                {
+                    if (sb.Length > 0)
+                    {
+                        sb.Length--;
+                        Console.Error.Write(" ");
+                    }
+
+                    continue;
+                }
+
+                if (!char.IsControl(k.KeyChar))
+                {
+                    sb.Append(k.KeyChar);
+                    Console.Error.Write('*');
+                }
+            }
+
+            Console.Error.WriteLine();
+            return sb.ToString();
         }
 
         private static KeyProtection Protection(Args a, KeyProtection fallback)

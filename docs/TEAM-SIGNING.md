@@ -107,14 +107,17 @@ $lp = '.\tools\LotR.Publish\bin\Release\net48\lotr-publish.exe'
 
 The two `keyId` lines must be identical (`export-key` also reads the copy back). Then:
 
-1. Backup: the plain file is a 5-line text. Paste its content into a password manager (secure note "LotR release
-   key") or print it and keep the sheet at home. Never Discord, mail or Google Drive. Then delete the file and empty
-   the recycle bin.
+1. Backup, encrypted with a passphrase you choose (20+ characters, e.g. a 5-6 word sentence):
+   `& $lp export-key --key "$env:USERPROFILE\Desktop\release-signing.plain.key" --protection passphrase`.
+   It asks the passphrase twice (hidden), writes `%USERPROFILE%\.lotrmp\release-signing.backup.key` (AES-256-CBC +
+   HMAC-SHA256, keys from PBKDF2-HMAC-SHA256 with 600,000 iterations) and reads it back. That file is useless without the
+   passphrase, so keep a copy off the PC too (a cloud drive); never store the passphrase next to it. Restore on a new
+   PC: `export-key --key <backup> --protection dpapi-user`. Then delete the plain file and empty the recycle bin.
 2. On the server, delete `C:\www\lotrmp\data\secrets\release-signing.key` (keep `release-signing.pub.pem`!).
    The Modules screen then shows "Signing key: on the team's PCs".
 3. Run `TEAM-PUBLISH.cmd -DryRun` once: it must say "Release key ... (the key the launcher trusts)".
 
-A second team member gets the same key the same way (from the offline backup), on their own account.
+A second team member gets the same key the same way (from the passphrase backup), on their own account.
 
 `dpapi-user` means: only this Windows account on this PC can decrypt the file. A copied file, another account, a
 service or an administrator cannot. Protect the Windows account (password, BitLocker on a laptop).
@@ -143,6 +146,7 @@ service or an administrator cannot. Protect the Windows account (password, BitLo
 | `publish-updater --exe <exe> --updater-dir <dir>\updater --base-url https://domain` | PC | signed launcher files (the PC key by default) |
 | `apply-signed --from <dir> --root R` | server | installs `updater\` and `releases\<id>\manifest.json.sig` after checking them |
 | `export-key ... --protection dpapi-user` | PC | the key for this account only, read back after writing |
+| `export-key ... --protection passphrase` | PC | the offline backup, encrypted with a passphrase (asked, never an argument) |
 
 `set-channel` (rollback) still works on the server without the private key: it only checks signatures.
 
