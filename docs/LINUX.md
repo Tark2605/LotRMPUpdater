@@ -248,8 +248,10 @@ the event-night lock (8).
 | Publishing: archive check, `publish-updater --platform linux`, `apply-signed`, `updaterLinux` in the site data, launcher notice | pass (`LinuxUpdaterTests`, `LinuxLauncherCheckTests`, `LauncherNoticeTests`); checked on a real `Build-LinuxUpdater.ps1` archive (14/11) |
 | `e2e-local.sh` with the win-x64 builds in Git Bash | 31/31 pass |
 | linux-x64 build | builds, one ELF x86-64 file, no trim warnings |
-| linux-x64 binary run on Linux / WSL / Steam Deck | **not yet**: to do on a real machine before announcing it |
+| linux-x64 binary run on Linux (WSL Ubuntu 24.04, 14/11) | `e2e-local.sh` **31/31 pass** with the linux-x64 builds |
+| Production build against middleearthevent.com (WSL, fake game, 14/11) | `status` (signature valid), full `install` 8.0 GB / 33 059 objects in 550 s, `verify` 1283/1283 OK |
+| Steam Deck | **not yet** |
 | Real Proton game: process detection through `/proc`, modules seen by the launcher, `steam://` start | **not yet** |
 
-Before the first public release: run `e2e-local.sh` on a Linux machine, then one real install on a Steam Deck (or any
+Before the first public release (`e2e-local.sh` on Linux: done 14/11): one real install on a Steam Deck (or any
 Linux PC with Bannerlord) against the production server, start the game and check that the modules are listed.
