@@ -233,6 +233,32 @@ function redactUrl(text) {
 // ---------------------------------------------------------------------------------------------------------------
 // Receiver
 // ---------------------------------------------------------------------------------------------------------------
+// Resolves true when a request with no declared length ends without a single byte (within 10 s).
+// The first byte settles it: the rest is never read, the socket is not kept for a stray body.
+function bodyIsEmpty(req, timeoutMs = 10_000) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (empty) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            req.off('data', onData);
+            req.off('end', onEnd);
+            req.off('error', onError);
+            if (!empty) req.pause();
+            resolve(empty);
+        };
+        const onData = (chunk) => { if (chunk.length > 0) finish(false); };
+        const onEnd = () => finish(true);
+        const onError = () => finish(false);
+        const timer = setTimeout(() => finish(false), timeoutMs);
+        timer.unref?.();
+        req.on('data', onData);
+        req.on('end', onEnd);
+        req.on('error', onError);
+    });
+}
+
 function createSiteUpdate(config, { logger = silentLogger, now = () => Date.now(), fetchImpl = (...a) => fetch(...a) } = {}) {
     const su = { ...SITE_UPDATE_DEFAULTS, ...config.siteUpdate };
     const log = logger;
@@ -479,7 +505,12 @@ function createSiteUpdate(config, { logger = silentLogger, now = () => Date.now(
             throw error;
         }
         const declared = req.headers['content-length'];
-        if ((declared !== undefined && Number(declared) !== 0) || req.headers['transfer-encoding']) {
+        if (declared !== undefined && Number(declared) !== 0) {
+            throw new HttpError(400, 'body_not_empty', 'a signed envelope (POST) has no body; the package goes with PUT or through its URL');
+        }
+        // A proxy chain (Cloudflare edge -> cloudflared -> Caddy) may turn an empty POST into a
+        // chunked one with zero bytes: accept that, refuse as soon as one byte of body arrives.
+        if (req.headers['transfer-encoding'] && !(await bodyIsEmpty(req))) {
             throw new HttpError(400, 'body_not_empty', 'a signed envelope (POST) has no body; the package goes with PUT or through its URL');
         }
         admit(signedReq, ip, SCHEMA_URL);

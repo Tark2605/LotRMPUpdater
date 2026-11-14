@@ -294,9 +294,10 @@ async function startOrigin(routes) {
     return { port: server.address().port, hits, stop: () => new Promise((ok) => { server.closeAllConnections(); server.close(ok); }) };
 }
 
-function post(port, { headers = {}, body = null } = {}) {
+// chunked: no content-length, transfer-encoding chunked (what a proxy chain may forward).
+function post(port, { headers = {}, body = null, chunked = false } = {}) {
     return new Promise((resolve, reject) => {
-        const h = { ...headers, 'content-length': String(body ? body.length : 0) };
+        const h = chunked ? { ...headers, 'transfer-encoding': 'chunked' } : { ...headers, 'content-length': String(body ? body.length : 0) };
         const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/site-update', headers: h }, (res) => {
             const chunks = [];
             res.on('data', (c) => chunks.push(c));
@@ -359,6 +360,23 @@ test('envelope (POST, schema 2): the service downloads, checks and stores; the e
     const again = await post(s.port, { headers: signed(envelopeMeta(body, url), s.keys.privateKey).headers });
     assert.equal(again.status, 409);
     assert.equal(origin.hits.length, hitsBefore);
+});
+
+test('envelope: an empty chunked POST (Cloudflare tunnel, Caddy) is accepted, a chunked body is not', async (t) => {
+    const s = await startReceiver({ siteUpdate: { allowLoopbackHttpDownload: true } });
+    t.after(s.stop);
+    const body = payload(50_000);
+    const origin = await startOrigin({ '/c.zip': { body } });
+    t.after(origin.stop);
+    const url = `http://127.0.0.1:${origin.port}/c.zip`;
+    const withChunk = await post(s.port, { headers: signed(envelopeMeta(body, url), s.keys.privateKey).headers, body: Buffer.from('x'), chunked: true });
+    assert.equal(withChunk.status, 400);
+    assert.equal(withChunk.json.error, 'body_not_empty');
+    assert.equal(origin.hits.length, 0, 'nothing downloaded for a refused envelope');
+    const empty = await post(s.port, { headers: signed(envelopeMeta(body, url), s.keys.privateKey).headers, chunked: true });
+    assert.equal(empty.status, 201, JSON.stringify(empty.json));
+    assert.equal(empty.json.state, 'stored');
+    assert.ok(fs.readFileSync(path.join(s.inbox, `${empty.json.id}.zip`)).equals(body));
 });
 
 test('envelope: refused hosts, schema/method mix-ups and a body are rejected before any download', async (t) => {
