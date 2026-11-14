@@ -44,6 +44,10 @@ namespace Lotr.Updater.Core.Planning
 
         public static string ToLocal(string folder, string relPath) => RelativePath.ToFileSystem(folder, relPath);
 
+        /// <summary>How file paths in a module folder compare: <see cref="OsPath.Comparer"/> (ignoring case on Windows, exact on
+        /// Linux). Tests set it to <see cref="StringComparer.Ordinal"/> to exercise the Linux rules on Windows.</summary>
+        internal StringComparer PathComparer { get; set; } = OsPath.Comparer;
+
         /// <summary>Last per-module checks (Verify my install reads them).</summary>
         public Dictionary<string, InstallCheck> LastChecks { get; private set; } = new Dictionary<string, InstallCheck>();
 
@@ -56,6 +60,7 @@ namespace Lotr.Updater.Core.Planning
             plan.BackupPath = _paths.BackupDir(installedReleaseId ?? ("before-" + manifest.ReleaseId));
             var checks = new Dictionary<string, InstallCheck>(StringComparer.Ordinal);
             var local = new LocalContent();
+            var shadows = new List<(string Folder, string Path)>();
 
             // Chunk indexes of this release: small, fetched once, kept in the cache (CONTRACTS §8: keep the installed release's indexes).
             foreach (var f in manifest.AllFiles.Where(x => x.Chunked))
@@ -74,10 +79,10 @@ namespace Lotr.Updater.Core.Planning
                 plan.Modules.Add(mp);
                 if (!mp.IsNewFolder) mp.LocalId = DuplicateModuleScanner.ReadModuleId(_fs, folder);
                 if (mp.LocalId != null && !string.Equals(mp.LocalId, m.Id, StringComparison.OrdinalIgnoreCase))
-                    plan.Issues.Add(new PlanIssue(IssueSeverity.Warning, $"The folder Modules\\{m.Folder} currently holds another module ({mp.LocalId}). Its files will be replaced by {m.DisplayName()}; replaced files go to the backup folder."));
+                    plan.Issues.Add(new PlanIssue(IssueSeverity.Warning, $"The folder Modules{Path.DirectorySeparatorChar}{m.Folder} currently holds another module ({mp.LocalId}). Its files will be replaced by {m.DisplayName()}; replaced files go to the backup folder."));
 
                 status?.Report($"Checking {m.DisplayName()} ({m.Files.Count} files)…");
-                var check = InstalledModuleVerifier.Verify(folder, m, InstallCheckMode.SizeOnly, cancel: ct);
+                var check = InstalledModuleVerifier.Verify(folder, m, InstallCheckMode.SizeOnly, cancel: ct, pathComparer: PathComparer);
                 // SizeOnly + our hash cache = a real hash check without re-reading 10 GB every time (Verify my install forces it).
                 int i = 0;
                 foreach (var f in check.Files.Where(x => x.State == InstalledFileState.Ok))
@@ -97,6 +102,18 @@ namespace Lotr.Updater.Core.Planning
                 }
                 check.Extra.RemoveAll(InstallLayout.IsStagingPath);
                 mp.Extra.AddRange(check.Extra);
+                // Linux: a file whose name differs from a release file only by letter case ("moduledata/a.xml" next to
+                // "ModuleData/a.xml") is a second copy there, and the game (Wine) may read either. Only names the release itself
+                // uses are concerned, so the player's own files are still never touched.
+                if (!ReferenceEquals(PathComparer, StringComparer.OrdinalIgnoreCase) && check.Extra.Count > 0)
+                {
+                    // A set, not a scan per extra file: the Core lists ~33,000 files.
+                    var anyCase = new HashSet<string>(m.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+                    var exact = new HashSet<string>(m.Files.Select(f => f.Path), PathComparer);
+                    foreach (var x in check.Extra)
+                        if (anyCase.Contains(x) && !exact.Contains(x))
+                            shadows.Add((m.Folder, x));
+                }
                 checks[m.Id] = check;
                 local.AddInstalled(check);
                 // Files of the previous release that moved or were renamed: their content can be copied instead of downloaded.
@@ -193,7 +210,18 @@ namespace Lotr.Updater.Core.Planning
                 var full = ToLocal(mp.TargetFolder, path);
                 if (!_fs.FileExists(full)) continue;
                 mp.Actions.Add(new PlanAction { Kind = FileActionKind.Remove, RelPath = path, OldSize = _fs.GetFileLength(full) });
-                mp.Extra.RemoveAll(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+                mp.Extra.RemoveAll(x => PathComparer.Equals(x, path));
+            }
+            foreach (var (folder, path) in shadows)
+            {
+                var mp = plan.Modules.First(x => string.Equals(x.Module.Folder, folder, StringComparison.Ordinal));
+                if (mp.Actions.Any(a => a.Kind == FileActionKind.Remove && string.Equals(a.RelPath, path, StringComparison.Ordinal))) continue;
+                var full = ToLocal(mp.TargetFolder, path);
+                if (!_fs.FileExists(full)) continue;
+                mp.Actions.Add(new PlanAction { Kind = FileActionKind.Remove, RelPath = path, OldSize = _fs.GetFileLength(full) });
+                mp.Extra.RemoveAll(x => string.Equals(x, path, StringComparison.Ordinal));
+                plan.Issues.Add(new PlanIssue(IssueSeverity.Info,
+                    $"An old copy of a mod file with different letter case is moved to the backup folder: {folder}/{path}. Linux keeps both names apart, and the game could read the wrong one."));
             }
             plan.ReusedLocalBytes = dp.LocalReuseBytes;
             if (plan.WorkshopReusedBytes > 0)
@@ -300,7 +328,7 @@ namespace Lotr.Updater.Core.Planning
         }
 
         private static bool IsUnder(string path, List<string> folders) =>
-            path != null && folders.Any(d => Path.GetFullPath(path).StartsWith(Path.GetFullPath(d).TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
+            path != null && folders.Any(d => OsPath.IsStrictlyUnder(path, d));
 
         private ChunkIndex TryParseIndex(string obj, CancellationToken ct)
         {

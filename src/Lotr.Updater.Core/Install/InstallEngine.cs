@@ -141,7 +141,7 @@ namespace Lotr.Updater.Core.Install
             var running = _processes.RunningGameProcesses();
             if (running.Count > 0)
                 plan.Issues.Add(new PlanIssue(forApply ? IssueSeverity.Blocker : IssueSeverity.Warning,
-                    "Bannerlord or its launcher is running (" + string.Join(", ", running.Select(r => r.Name)) + "). Close it before updating: Windows does not let anyone replace files the game is using."));
+                    PlayerErrors.GameRunningText(running.Select(r => r.Name))));
 
             foreach (var m in plan.Modules.Where(x => x.HasChanges))
             {
@@ -151,11 +151,7 @@ namespace Lotr.Updater.Core.Install
                 {
                     // The probe detail carries a Windows message in the player's language: log only.
                     _log?.Write(LogLevel.Warn, "Write test failed: " + probe.Detail);
-                    plan.Issues.Add(new PlanIssue(IssueSeverity.Blocker,
-                        $"Windows does not let this app write in {probeDir} (it never asks for administrator rights). " +
-                        (g.IsProtectedLocation
-                            ? "Your game is in a protected Xbox/Windows folder: in the Xbox app, open Bannerlord > Manage > Files and enable \"Advanced management features\", or move the game to another folder."
-                            : "Check that the folder is not read-only and that Windows Security \"Controlled folder access\" allows LotRMPUpdater, or move the game to a folder you own (for example D:\\Games).")));
+                    plan.Issues.Add(new PlanIssue(IssueSeverity.Blocker, PlayerErrors.CannotWriteText(probeDir, g.IsProtectedLocation)));
                     break;
                 }
             }
@@ -176,11 +172,11 @@ namespace Lotr.Updater.Core.Install
         public List<string> SpaceProblems(InstallPlan plan, bool downloadOnly)
         {
             var problems = new List<string>();
-            var need = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            var need = new Dictionary<string, long>(OsPath.Comparer);
             void Add(string path, long bytes)
             {
                 if (bytes <= 0) return;
-                var root = Path.GetPathRoot(Path.GetFullPath(path));
+                var root = RealFileSystem.VolumeOf(path); // drive root on Windows, mount point on Linux
                 need[root] = (need.TryGetValue(root, out var v) ? v : 0) + bytes;
             }
             Add(_paths.ObjectCache, plan.DownloadBytes);
@@ -527,7 +523,7 @@ namespace Lotr.Updater.Core.Install
             int switched = 0;
             foreach (var m in plan.Modules)
             {
-                var acted = new HashSet<string>(m.Actions.Select(x => x.RelPath), StringComparer.OrdinalIgnoreCase);
+                var acted = new HashSet<string>(m.Actions.Select(x => x.RelPath), OsPath.Comparer);
                 foreach (var a in m.Actions.ToList())
                 {
                     ct.ThrowIfCancellationRequested();
@@ -536,8 +532,8 @@ namespace Lotr.Updater.Core.Install
                     if (a.Source == FileAction.CopyLocal) why = CopySourceProblem(plan, a, ct);
                     else if (a.Source == FileAction.Rebuild)
                     {
-                        var bad = a.Chunks.Where(x => x.Local != null).Select(x => x.Local.FullPath).Distinct(StringComparer.OrdinalIgnoreCase)
-                            .Where(p => ChunkSourceProblem(plan, p, a.Chunks.Where(x => x.Local != null && string.Equals(x.Local.FullPath, p, StringComparison.OrdinalIgnoreCase)).Max(x => x.Local.Offset + x.Local.Size)) != null)
+                        var bad = a.Chunks.Where(x => x.Local != null).Select(x => x.Local.FullPath).Distinct(OsPath.Comparer)
+                            .Where(p => ChunkSourceProblem(plan, p, a.Chunks.Where(x => x.Local != null && string.Equals(x.Local.FullPath, p, OsPath.Comparison)).Max(x => x.Local.Offset + x.Local.Size)) != null)
                             .ToList();
                         if (bad.Count > 0) why = "reused parts come from a file that changed: " + string.Join(", ", bad);
                     }
@@ -689,6 +685,9 @@ namespace Lotr.Updater.Core.Install
 
         private static bool IsSharingViolation(IOException ex)
         {
+            // Windows: sharing / lock violation, access denied while another program holds the file. Linux has no mandatory
+            // locks (a rename always succeeds) and its errno 5 is a disk I/O error, not a lock: never retried as one.
+            if (!OsPath.IsWindows) return false;
             int code = ex.HResult & 0xFFFF;
             return code == 32 || code == 33 || code == 5;
         }
@@ -734,7 +733,7 @@ namespace Lotr.Updater.Core.Install
             {
                 if (_fs.DirectoryExists(oldRoot))
                 {
-                    var prefix = oldRoot.TrimEnd('\\') + "\\";
+                    var prefix = OsPath.WithTrailingSeparator(oldRoot);
                     foreach (var f in _fs.EnumerateFiles(oldRoot, true).ToList())
                     {
                         var dst = Path.Combine(j.BackupDir, f.Substring(prefix.Length));
@@ -753,17 +752,7 @@ namespace Lotr.Updater.Core.Install
             }
         }
 
-        private static bool IsUnder(string dir, string root)
-        {
-            if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(root)) return false;
-            try
-            {
-                var d = Path.GetFullPath(dir).TrimEnd('\\') + "\\";
-                var r = Path.GetFullPath(root).TrimEnd('\\') + "\\";
-                return d.Length > r.Length && d.StartsWith(r, StringComparison.OrdinalIgnoreCase);
-            }
-            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException) { return false; }
-        }
+        private static bool IsUnder(string dir, string root) => OsPath.IsStrictlyUnder(dir, root);
 
         private static bool IsReparsePoint(string dir)
         {
@@ -818,7 +807,7 @@ namespace Lotr.Updater.Core.Install
             try
             {
                 foreach (var d in _fs.EnumerateDirectories(_paths.BackupRoot).ToList())
-                    if (!string.Equals(Path.GetFullPath(d).TrimEnd('\\'), Path.GetFullPath(keep).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    if (!OsPath.SameFolder(d, keep))
                         _fs.DeleteDirectory(d, true);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { _log?.Write(LogLevel.Detail, "Old backup not removed: " + ex.Message); }

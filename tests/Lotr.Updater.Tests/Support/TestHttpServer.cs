@@ -52,6 +52,12 @@ namespace Lotr.Updater.Testing
 
         /// <summary>Queue: number of 429 answers before granting a slot.</summary>
         public int QueueBusyAnswers { get; set; }
+        /// <summary>Queue: slot requests get this status instead (503, 530 = what Cloudflare answers while the /api origin is
+        /// down, 404 = no queue on this server); 0 = normal service.</summary>
+        public int QueueFailStatus { get; set; }
+        /// <summary>Queue: slot requests never get an answer (held until the server stops).</summary>
+        public bool QueueHang { get; set; }
+        public int QueueSlotRequests;
         public int QueueSlotsGranted;
         public int QueueSlotsReleased;
         public int Heartbeats;
@@ -178,6 +184,23 @@ namespace Lotr.Updater.Testing
             using (var r = new StreamReader(ctx.Request.InputStream, Encoding.UTF8)) body = r.ReadToEnd();
             if (path == "/api/queue/slot")
             {
+                Interlocked.Increment(ref QueueSlotRequests);
+                if (QueueHang)
+                {
+                    _cts.Token.WaitHandle.WaitOne(TimeSpan.FromMinutes(5));
+                    try { ctx.Response.Abort(); } catch { }
+                    return;
+                }
+                if (QueueFailStatus != 0)
+                {
+                    var page = Encoding.UTF8.GetBytes("<html><body>error code: " + QueueFailStatus + "</body></html>");
+                    ctx.Response.StatusCode = QueueFailStatus;
+                    ctx.Response.ContentType = "text/html";
+                    ctx.Response.ContentLength64 = page.Length;
+                    ctx.Response.OutputStream.Write(page, 0, page.Length);
+                    ctx.Response.Close();
+                    return;
+                }
                 int n = Interlocked.Increment(ref _queueAsked);
                 if (n <= QueueBusyAnswers) { Json(ctx, 429, "{\"position\":" + (QueueBusyAnswers - n + 1) + ",\"retryAfter\":1}"); return; }
                 Interlocked.Increment(ref QueueSlotsGranted);

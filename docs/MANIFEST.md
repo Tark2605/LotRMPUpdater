@@ -128,6 +128,30 @@ lotr-publish publish-updater --exe <signed LotRMPUpdater.exe> --root C:\www\lotr
   `%LOCALAPPDATA%\LotRMPUpdater\app\update\`, swapped in at the next start, and the previous one is kept as
   `LotRMPUpdater.old.exe` (About › "Go back to the previous version" = `--rollback-updater`).
 
+#### The Linux updater (`publish-updater --platform linux`)
+
+```
+lotr-publish publish-updater --platform linux --archive <dist\updater\lotr-updater-<version>-linux-x64.tar.gz>
+                             (--root C:\www\lotrmp | --updater-dir <files\updater>) [--version 1.2.3]
+                             [--base-url https://<domain>] [--key <file>] [--no-sign] [--force] [--json]
+```
+- Versioned on its own (`<Version>` of `src/Lotr.Updater.Cli`), in its own folder; the Windows files above are never
+  touched. Writes into `<updater-dir>\linux\`: `lotr-updater-<version>-linux-x64.tar.gz`, its `.sha256`
+  (`<hex>  <name>` + LF), `latest.json.sig`, then `latest.json` LAST, each atomically. One `latest.json`, no channels.
+- `latest.json` has the same schema as the Windows one; `url` = `/files/updater/linux/lotr-updater-<version>-linux-x64.tar.gz`
+  (or `https://<domain>` + that with `--base-url`), `signed` = false (no Authenticode on Linux; the release-key
+  signature is `latest.json.sig`). R2 keys: the same paths without `/files/` (`updater/linux/...`).
+- The version comes from the archive's file name (`--version` must agree with it). The archive is read whole and
+  refused unless it is a gzip tar with valid headers holding only plain files and folders under
+  `lotr-updater-<version>/` (no links, devices, absolute or `../` paths, pax paths included) and the program
+  `lotr-updater-<version>/lotr-updater`, executable, a 64-bit x86-64 ELF file. When the build's `.sha256` is next to
+  the archive, it must match (a damaged copy is caught).
+- `apply-signed` installs `<signed>\updater\linux\` into `<root>\files\updater\linux\` with the same rules as the exe
+  (signature, url, size + SHA-256, never a downgrade) plus the archive check above.
+- The Linux updater never replaces itself: `lotr-updater status` / `install` read `files/updater/linux/latest.json`
+  (+ `.sig`, same trust rule as the Windows self-update; never the Windows `latest.json`) and only tell the player that
+  a newer version is on the Install page (docs/LINUX.md).
+
 ### Production key (embedding it in the updater)
 
 The updater trusts every `src/Lotr.Updater.Core/Security/Keys/*.pub.pem` (embedded resources `trusted-keys/<file>`).
@@ -193,8 +217,11 @@ Order of checks, all in `LotR.Releases`:
 `current` (releaseId, channel, publishedAt, notes, game, signature {keyId, fingerprint, verified}, size, download,
 modules [id, name, version, role, folder, size, files, download, workshopItem], security summary from
 `security.json`: VirusTotal files/pending/detections/suspicious/reports, Hybrid Analysis files/pending/verdicts/reports),
-`updater` (`files\updater\latest.json` as is, or null), `history` (last 10 releases of the channel: releaseId,
-publishedAt, versions by module id). `current` is null until the first publish.
+`updater` (`files\updater\latest.json` as is, or null), `updaterLinux` (`files\updater\linux\latest.json`, same
+shape, or null: absent, invalid, not pointing at this server's `lotr-updater-<version>-linux-x64.tar.gz`, or, when a
+trusted key is given, without a valid `latest.json.sig`; each case is a warning; `--updater-linux-latest <file>`
+overrides the path), `history` (last 10 releases of the channel: releaseId, publishedAt, versions by module id).
+`current` is null until the first publish.
 
 ## 6. Measured (15/10/2026, Ryzen 9 7900X 24 threads, NVMe, real LotRMPEvent v1.0.2.2 from the team repo clone)
 

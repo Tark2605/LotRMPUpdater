@@ -21,8 +21,9 @@ Modules > Dry run > "Prepare the release"
   lotr-publish publish --pending
   files\releases\<id>\  manifest + objects,
   verified, NOT signed; channel unchanged;
-  files\releases\pending.json names it  ---> sign-release: reads pending.json and the
-                                              manifest over https, checks:
+  files\releases\pending.json names it  ---> r2-sync fetch-server: pending.json, channels.json,
+                                              manifests (signed read on /api/site-update)
+                                             sign-release --from <that copy>, checks:
                                               - the live release carries OUR signature
                                               - nothing but the domain may differ in the
                                                 endpoints; newer than live; canonical
@@ -31,10 +32,17 @@ Modules > Dry run > "Prepare the release"
                                                 game Modules folder); unchanged modules
                                                 must be byte-identical to the signed live one
                                               shows the summary, asks, signs
+                                             r2-sync release: objects missing in R2 fetched
+                                              from the server, checked, sent; signature last
+                                              (players see nothing yet)
                                              publish-updater (when dist\updater has a newer
                                               launcher): Defender scan, signs latest.json
                                              Build-DeployPackage -SignedDir: package + signed\
-                                             site-update.mjs send (signed mailbox)  -------> Update-Site.ps1 (auto-install
+                                             r2-sync deliver: package staged in R2, signed
+                                              envelope (URL + SHA-256)  ---------------------> server downloads + checks it
+                                             r2-sync switch: R2 channels.json LAST, read
+                                              back through the domain; clean-up; launcher
+                                              (latest.json last)                              Update-Site.ps1 (auto-install
                                                                                               or "Install now"):
                                                                                               package signature checked,
                                                                                               Deploy-Site -CodeOnly,
@@ -46,7 +54,21 @@ Modules > Dry run > "Prepare the release"
                                                                                               downgrade), site rebuilt
 ```
 
-Players keep the live release until the signature arrives. A refused check signs nothing and sends nothing.
+Players keep the live release until the R2 `channels.json` is switched, the very last step of the release. A refused
+check signs nothing and sends nothing; a failure before the switch leaves players on the live release and the next
+run resumes (objects already in R2 are not sent again). Players download from R2 (`/files/*`), so the server's own
+channel switch (apply-signed) only keeps the server's complete copy up to date. Details, options and troubleshooting:
+`site/docs/PUBLISH-TO-R2.md`.
+
+Two guards protect players at the R2 step:
+
+- **Signature, as the launcher checks it.** `r2-sync` verifies `manifest.json.sig` with the launcher's own public key
+  (`installer\src\Lotr.Updater.Core\Security\Keys\release-signing.pub.pem`, Team-Publish's `-LauncherKey`) before
+  sending a release, and again on the copy the bucket serves before the switch. A signature by another key, or over
+  other bytes, stops the run: nothing is switched, so no launcher is ever pointed at a release it would refuse.
+- **Confirmed delivery.** Players move only once the server has CONFIRMED it holds the website package (and so its own
+  copy of the release). If it is still downloading after 20 minutes, TEAM-PUBLISH stops with exit 2, switches
+  nothing and prints what to do next; a delivery the server lost (service restarted) is reported as failed.
 
 ## Every time (team member)
 
@@ -61,8 +83,19 @@ A new launcher: put the built `LotRMPUpdater-<version>.exe` in `LOTR\dist\update
 publishes it only if it is newer than the one the site serves. Same for website-only changes: `TEAM-PUBLISH.cmd`
 sends the package even when there is nothing to sign (it asks first).
 
-Options (`site\scripts\Team-Publish.ps1`): `-DryRun` (everything but the upload), `-Notes "..."`, `-Yes`,
-`-SkipBuild`, `-NoUpdater`. Log of each run: `site\.build-deploy\team-publish\<stamp>.log`.
+A new **Linux** launcher (`lotr-updater`, docs/LINUX.md) is signed the same way, on its own version line and in its
+own folder: `tools\Build-LinuxUpdater.ps1` writes `LOTR\dist\updater\lotr-updater-<version>-linux-x64.tar.gz`, then
+`lotr-publish publish-updater --platform linux --archive <that file> --updater-dir <signed>\updater --base-url https://domain`
+signs `<signed>\updater\linux\latest.json`, and `apply-signed` installs `updater\linux\` on the server (same checks,
+plus the archive check). The Windows files are never touched by it, and the Windows launcher never reads it.
+TEAM-PUBLISH does all of this when it finds that archive (newest `x.y.z` in `LOTR\dist\updater\`, newer than the one
+R2 serves); it rebuilds `lotr-publish.exe` first when the build is older than its sources (an older build has no
+`--platform linux`).
+
+Options (`site\scripts\Team-Publish.ps1`): `-DryRun` (everything that only reads: nothing sent, staged or switched),
+`-Notes "..."`, `-Yes`, `-SkipBuild`, `-NoUpdater`, `-Delivery auto|r2|direct`, `-R2Bucket <name>` (tests:
+`lotrmp-files-test`), `-R2Endpoint` / `-ReleasesFrom` (tests), `-Readback <https://domain>`. Log of each run:
+`site\.build-deploy\team-publish\<stamp>.log`. Once per PC: `SET-R2-TOKEN.cmd` (R2 API token, DPAPI).
 
 ## Settings of the PC
 
@@ -142,9 +175,10 @@ service or an administrator cannot. Protect the Windows account (password, BitLo
 |---|---|---|
 | `publish ... --pending` | server | release without signature, `pending.json` |
 | `pending --root R` | server | what waits for the signature |
-| `sign-release --from https://domain --out <dir> [--modules-root <dir>]... [--module F=<dir>]... [--base-url ..] [--yes]` | PC | review + sign (exit 0 also when nothing is pending, 1 refused, 3 declined) |
+| `sign-release --from <dir or https://domain> --out <dir> [--modules-root <dir>]... [--module F=<dir>]... [--base-url ..] [--yes]` | PC | review + sign (exit 0 also when nothing is pending, 1 refused, 3 declined). Team-Publish passes the `r2-sync fetch-server` copy: `https://domain/files/releases/` is R2 now and has no `pending.json` |
 | `publish-updater --exe <exe> --updater-dir <dir>\updater --base-url https://domain` | PC | signed launcher files (the PC key by default) |
-| `apply-signed --from <dir> --root R` | server | installs `updater\` and `releases\<id>\manifest.json.sig` after checking them |
+| `publish-updater --platform linux --archive <tar.gz> --updater-dir <dir>\updater --base-url https://domain` | PC | signed Linux launcher files in `<dir>\updater\linux\` (the PC key by default) |
+| `apply-signed --from <dir> --root R` | server | installs `updater\`, `updater\linux\` and `releases\<id>\manifest.json.sig` after checking them |
 | `export-key ... --protection dpapi-user` | PC | the key for this account only, read back after writing |
 | `export-key ... --protection passphrase` | PC | the offline backup, encrypted with a passphrase (asked, never an argument) |
 

@@ -15,15 +15,20 @@ namespace LotR.Releases.Publishing
     ///                       modules: [ { id, name, version, role, folder, size, files, download } ],
     ///                       size, download, security: { virustotal: { files, detections, scanned }, hybridAnalysis: { files, verdicts } } },
     ///   "updater": null | latest.json,
+    ///   "updaterLinux": null | linux/latest.json   (same shape as "updater"; null = no Linux updater published yet),
     ///   "history": [ { releaseId, publishedAt, versions: { moduleId: version } } ]   (newest first, at most 10) }
     /// </code>
     /// "download" is the stored bytes a fresh install fetches (distinct objects, chunk indexes included). "security" summarises the unsigned sidecar
     /// &lt;release&gt;/security.json (CONTRACTS §8; only entries with status "done" count; null when absent).
+    /// "updaterLinux" is shown only when files\updater\linux\latest.json is valid, points at this server's
+    /// lotr-updater-&lt;version&gt;-linux-x64.tar.gz and (when a trusted key is given) carries a valid release-key signature;
+    /// anything else is a warning and null, so the Install page never offers a Linux download the team did not sign.
     /// Pretty-printed (it is read by people too).
     /// </summary>
     public static class SiteExporter
     {
-        public static JsonObject Build(string releasesRoot, string channel, IEnumerable<TrustedKey> trusted, string updaterLatestPath, List<string> warnings = null)
+        /// <param name="updaterLinuxLatestPath">files\updater\linux\latest.json; default: linux\latest.json next to <paramref name="updaterLatestPath"/>.</param>
+        public static JsonObject Build(string releasesRoot, string channel, IEnumerable<TrustedKey> trusted, string updaterLatestPath, List<string> warnings = null, string updaterLinuxLatestPath = null)
         {
             var trustedList = trusted?.ToList() ?? new List<TrustedKey>();
             var channels = ChannelIndex.Load(Path.Combine(releasesRoot, ReleaseFolder.ChannelsFile));
@@ -47,6 +52,13 @@ namespace LotR.Releases.Publishing
 
                 updater = latest.ToJson();
             }
+
+            if (updaterLinuxLatestPath == null && updaterLatestPath != null)
+            {
+                updaterLinuxLatestPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(updaterLatestPath)), LinuxUpdaterArchive.Folder, UpdaterPublisher.LatestFileName("stable"));
+            }
+
+            JsonNode updaterLinux = LinuxUpdater(updaterLinuxLatestPath, trustedList, warnings);
 
             var history = new JsonArray();
             if (Directory.Exists(releasesRoot))
@@ -82,10 +94,64 @@ namespace LotR.Releases.Publishing
                 }
             }
 
-            return new JsonObject { ["current"] = current, ["updater"] = updater, ["history"] = history };
+            return new JsonObject { ["current"] = current, ["updater"] = updater, ["updaterLinux"] = updaterLinux, ["history"] = history };
         }
 
         public static void Write(string outPath, JsonObject data) => AtomicFile.Write(outPath, JsonWriter.ToPrettyBytes(data));
+
+        /// <summary>linux\latest.json as the site shows it, or JSON null (absent, broken, foreign url, bad signature: warned).</summary>
+        private static JsonNode LinuxUpdater(string path, List<TrustedKey> trusted, List<string> warnings)
+        {
+            if (path == null || !File.Exists(path))
+            {
+                return JsonNull.Instance;
+            }
+
+            const string What = "linux updater latest.json";
+            byte[] bytes;
+            UpdaterLatest latest;
+            try
+            {
+                bytes = File.ReadAllBytes(path);
+                latest = UpdaterLatest.Parse(bytes);
+            }
+            catch (Exception e) when (e is IOException || e is FormatException)
+            {
+                warnings?.Add(What + " unreadable, Linux download not shown: " + e.Message);
+                return JsonNull.Instance;
+            }
+
+            var v = latest.Validate();
+            if (!v.IsValid)
+            {
+                warnings?.Add(What + ", Linux download not shown: " + string.Join("; ", v.Errors));
+                return JsonNull.Instance;
+            }
+
+            if (!LinuxUpdaterArchive.IsOwnUrl(latest.Url, latest.Version))
+            {
+                warnings?.Add(What + ": url " + latest.Url + " is not this server's " + LinuxUpdaterArchive.UrlPath(latest.Version) + ", Linux download not shown");
+                return JsonNull.Instance;
+            }
+
+            if (trusted.Count == 0)
+            {
+                warnings?.Add(What + ": no trusted public key to check its signature with (shown unverified)");
+                return latest.ToJson();
+            }
+
+            string sigPath = path + ".sig";
+            var check = File.Exists(sigPath)
+                ? ManifestSignature.Verify(bytes, File.ReadAllBytes(sigPath), trusted)
+                : new SignatureCheck { Valid = false, Message = "no latest.json.sig" };
+            if (!check.Valid)
+            {
+                warnings?.Add(What + " signature: " + check.Message + ", Linux download not shown");
+                return JsonNull.Instance;
+            }
+
+            return latest.ToJson();
+        }
 
         private static JsonObject Current(ReleaseFolder rel, List<TrustedKey> trusted, List<string> warnings)
         {

@@ -20,7 +20,7 @@ namespace Lotr.Updater.Core.Planning
     {
         private readonly string _file;
         private readonly IFileSystem _fs;
-        private readonly Dictionary<string, string> _hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _hashes = new Dictionary<string, string>(LotR.Releases.Model.OsPath.Comparer);
         private readonly Dictionary<string, string> _indexes = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly object _gate = new object();
 
@@ -86,7 +86,7 @@ namespace Lotr.Updater.Core.Planning
             {
                 // drop stale entries for this path
                 var prefix = Path.GetFullPath(path) + "|";
-                foreach (var k in _hashes.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList()) _hashes.Remove(k);
+                foreach (var k in _hashes.Keys.Where(k => k.StartsWith(prefix, LotR.Releases.Model.OsPath.Comparison)).ToList()) _hashes.Remove(k);
                 _hashes[key] = sha;
             }
             return sha;

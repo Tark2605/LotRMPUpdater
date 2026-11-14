@@ -124,16 +124,29 @@ namespace Lotr.Updater.Core.Net
             _log = log;
         }
 
-        /// <summary>Waits for a slot. Returns the token, or null when the server has no queue (404: advisory in v1).</summary>
+        /// <summary>Longest wait for one answer of the queue service (slot, heartbeat, release). A hung /api never blocks a download.</summary>
+        public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+        /// <summary>Pause before the single second try when the queue service does not answer properly.</summary>
+        public TimeSpan UnavailableRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+        /// <summary>
+        /// Waits for a slot. Returns the token, or null when the download should go ahead without one: the server has no queue
+        /// (404), or the queue service is unavailable (5xx including Cloudflare's 520-530, 408, any other 4xx, no answer within
+        /// <see cref="RequestTimeout"/>, network error, unreadable grant). The queue is advisory: the files themselves are static
+        /// (R2), so a broken /api must never stop an install. 429 = wait in the queue (position, retryAfter), as before.
+        /// Only the player's own cancellation throws.
+        /// </summary>
         public async Task<string> AcquireAsync(string installId, Action<int, TimeSpan> onWaiting, CancellationToken ct)
         {
             var body = Json.Json.Write(new JsonObject { ["kind"] = "core", ["client"] = installId }, indent: false);
-            for (int attempt = 1; ; attempt++)
+            int unavailable = 0;
+            while (true)
             {
                 int position = 0;
                 TimeSpan retry = TimeSpan.Zero;
                 bool queued = false, noQueue = false;
-                string text;
+                string text = null, why = null;
                 try
                 {
                     text = await _fetch.PostJsonAsync(_ep.QueueSlot, body, ct, (resp, b) =>
@@ -152,32 +165,44 @@ namespace Lotr.Updater.Core.Net
                         }
                         if (resp.StatusCode == HttpStatusCode.NotFound) { noQueue = true; return Task.FromResult(true); }
                         return Task.FromResult(false);
-                    }).ConfigureAwait(false);
+                    }, RequestTimeout).ConfigureAwait(false);
                 }
-                catch (HttpFetchException ex) when (attempt < 5)
-                {
-                    _log?.Write(LogLevel.Warn, "Download queue: " + ex.Message + "; retrying");
-                    await _fetch.Retry.Delay(_fetch.Retry.Backoff(attempt, null), ct).ConfigureAwait(false);
-                    continue;
-                }
-                catch (System.Net.Http.HttpRequestException ex) when (attempt < 5)
-                {
-                    _log?.Write(LogLevel.Warn, "Download queue unreachable: " + ex.Message + "; retrying");
-                    await _fetch.Retry.Delay(_fetch.Retry.Backoff(attempt, null), ct).ConfigureAwait(false);
-                    continue;
-                }
-                if (noQueue)
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (HttpFetchException ex) { why = ex.Status.HasValue ? ((int)ex.Status.Value).ToString(System.Globalization.CultureInfo.InvariantCulture) : ex.Message; }
+                catch (System.Net.Http.HttpRequestException ex) { why = "unreachable: " + (ex.InnerException?.Message ?? ex.Message); }
+                catch (OperationCanceledException) { why = "no answer within " + RequestTimeout.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " s"; }
+                catch (System.IO.IOException ex) { why = ex.Message; }
+
+                if (why == null && noQueue)
                 {
                     _log?.Write(LogLevel.Detail, "No download queue on this server; downloading directly.");
                     return null;
                 }
-                if (!queued)
+                if (why == null && !queued)
                 {
-                    var o = Json.Json.ParseObject(text);
-                    HeartbeatInterval = TimeSpan.FromSeconds(Math.Max(5, Math.Min(60, o.Long("heartbeatSec", 60))));
-                    _log?.Write(LogLevel.Info, "Download slot granted (valid until " + o.Str("expiresAt") + ").");
-                    return o.Str("token");
+                    try
+                    {
+                        var o = Json.Json.ParseObject(text);
+                        var token = o.Str("token");
+                        if (string.IsNullOrEmpty(token)) throw new FormatException("no token");
+                        HeartbeatInterval = TimeSpan.FromSeconds(Math.Max(5, Math.Min(60, o.Long("heartbeatSec", 60))));
+                        _log?.Write(LogLevel.Info, "Download slot granted (valid until " + o.Str("expiresAt") + ").");
+                        return token;
+                    }
+                    catch (FormatException ex) { why = "unreadable answer (" + ex.Message + ")"; }
                 }
+                if (why != null)
+                {
+                    if (++unavailable < 2)
+                    {
+                        _log?.Write(LogLevel.Detail, "Download queue: " + why + "; asking once more.");
+                        await _fetch.Retry.Delay(UnavailableRetryDelay, ct).ConfigureAwait(false);
+                        continue;
+                    }
+                    _log?.Write(LogLevel.Warn, "The download queue is not answering (" + why + "); downloading directly.");
+                    return null;
+                }
+                unavailable = 0; // the service answers again: a later hiccup gets its second try too
                 if (retry > TimeSpan.FromMinutes(5)) retry = TimeSpan.FromMinutes(5);
                 onWaiting?.Invoke(position, retry);
                 _log?.Write(LogLevel.Info, $"Many players are downloading the Core right now: you are number {position} in the queue. Next try in {retry.TotalSeconds:0} s.");
@@ -208,9 +233,9 @@ namespace Lotr.Updater.Core.Net
                 {
                     if (r.StatusCode == HttpStatusCode.Gone) expired = true;
                     return Task.FromResult(true);
-                }).ConfigureAwait(false);
+                }, RequestTimeout).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _log?.Write(LogLevel.Detail, "Queue heartbeat failed: " + ex.Message); }
             return !expired;
         }
@@ -221,7 +246,7 @@ namespace Lotr.Updater.Core.Net
             try
             {
                 var body = Json.Json.Write(new JsonObject { ["token"] = token }, indent: false);
-                await _fetch.PostJsonAsync(_ep.QueueRelease, body, CancellationToken.None, (r, b) => Task.FromResult(true)).ConfigureAwait(false);
+                await _fetch.PostJsonAsync(_ep.QueueRelease, body, CancellationToken.None, (r, b) => Task.FromResult(true), RequestTimeout).ConfigureAwait(false);
             }
             catch (Exception ex) { _log?.Write(LogLevel.Detail, "Queue release failed (the slot expires by itself): " + ex.Message); }
         }

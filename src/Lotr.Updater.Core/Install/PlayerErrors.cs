@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using LotR.Releases.Model;
 using Lotr.Updater.Core.Model;
 using Lotr.Updater.Core.Net;
 using Lotr.Updater.Core.Objects;
@@ -26,6 +27,8 @@ namespace Lotr.Updater.Core.Install
         Blocked,
         RollbackIncomplete,
         Cancelled,
+        /// <summary>The release itself was refused (signature, manifest rules, anti-rollback): never a network problem.</summary>
+        ReleaseRefused,
     }
 
     /// <summary>A problem described for a player (short, calm, English) plus the technical detail for the log and the
@@ -87,7 +90,9 @@ namespace Lotr.Updater.Core.Install
                     text = "A file from the server arrived damaged twice. Nothing was changed. Try again in a few minutes.";
                     break;
                 case ProblemKind.AccessDenied:
-                    text = "Windows did not let the updater read some of your mod files. Nothing was changed. Close the game and click Check again.";
+                    text = OsPath.IsWindows
+                        ? "Windows did not let the updater read some of your mod files. Nothing was changed. Close the game and click Check again."
+                        : "Linux did not let the updater read some of your mod files. Nothing was changed. Check that the game folder belongs to your user (never run the updater with sudo), then check again.";
                     break;
                 case ProblemKind.FileLocked:
                     text = "Some mod files are in use by another program (often the game or an antivirus scan). Nothing was changed. Close the game and click Check again.";
@@ -134,8 +139,10 @@ namespace Lotr.Updater.Core.Install
                 case ProblemKind.DiskFull:
                     return "Your disk became full during the update." + safe + " Free some space, then try again.";
                 case ProblemKind.AccessDenied:
-                    return "Windows refused the updater access to a file in your game folder." + safe +
-                           " Check that the folder is not read-only and that Windows Security \"Controlled folder access\" allows LotRMPUpdater, then try again.";
+                    return OsPath.IsWindows
+                        ? "Windows refused the updater access to a file in your game folder." + safe +
+                          " Check that the folder is not read-only and that Windows Security \"Controlled folder access\" allows LotRMPUpdater, then try again."
+                        : "Linux refused the updater access to a file in your game folder." + safe + " " + LinuxWriteAdvice + " Then try again.";
                 case ProblemKind.Network:
                     return "The download stopped because the LotR server could not be reached. Nothing was changed in your game folder, and what was already downloaded is kept. Check your internet connection and try again.";
                 case ProblemKind.ServerMissingFile:
@@ -182,22 +189,59 @@ namespace Lotr.Updater.Core.Install
                 case IOException io:
                     if (IsDiskFull(io)) return ProblemKind.DiskFull;
                     if (IsSharingViolation(io)) return ProblemKind.FileLocked;
+                    if (IsReadOnlyFileSystem(io, OsPath.IsWindows)) return ProblemKind.AccessDenied;
                     return ProblemKind.Unknown;
                 default: return ProblemKind.Unknown;
             }
         }
 
-        public static bool IsDiskFull(Exception ex)
+        public static bool IsDiskFull(Exception ex) => IsDiskFull(ex, OsPath.IsWindows);
+
+        /// <summary>Windows: ERROR_DISK_FULL (112) / ERROR_HANDLE_DISK_FULL (39). Elsewhere .NET puts the errno in HResult:
+        /// ENOSPC (28) / EDQUOT (122); there 39 is ENOTEMPTY and must not read as "disk full".</summary>
+        internal static bool IsDiskFull(Exception ex, bool windows)
         {
+            if (!(ex is IOException)) return false;
             int code = ex.HResult & 0xFFFF;
-            return ex is IOException && (code == 112 || code == 39);
+            return windows ? code == 112 || code == 39 : code == 28 || code == 122;
         }
 
-        public static bool IsSharingViolation(Exception ex)
+        public static bool IsSharingViolation(Exception ex) => IsSharingViolation(ex, OsPath.IsWindows);
+
+        /// <summary>Windows sharing / lock violation (32 / 33). Linux has no mandatory file locks (there 32 is EPIPE).</summary>
+        internal static bool IsSharingViolation(Exception ex, bool windows)
         {
+            if (!windows || !(ex is IOException)) return false;
             int code = ex.HResult & 0xFFFF;
-            return ex is IOException && (code == 32 || code == 33);
+            return code == 32 || code == 33;
         }
+
+        /// <summary>Linux only: EROFS (30), a read-only file system (SD card mounted read-only, Flatpak sandbox).</summary>
+        internal static bool IsReadOnlyFileSystem(Exception ex, bool windows) => !windows && ex is IOException && (ex.HResult & 0xFFFF) == 30;
+
+        /// <summary>What a Linux player checks when the game folder cannot be written (no Windows Security, no drive letters).</summary>
+        internal const string LinuxWriteAdvice =
+            "Check that the game folder belongs to your user and is not read-only (a read-only SD card, files created with sudo, " +
+            "or Steam installed as a Flatpak without access to that drive). Never run the updater with sudo.";
+
+        /// <summary>Plan blocker: the module folder cannot be written. Never asks for administrator rights.</summary>
+        public static string CannotWriteText(string folder, bool protectedLocation) => CannotWriteText(folder, protectedLocation, OsPath.IsWindows);
+
+        internal static string CannotWriteText(string folder, bool protectedLocation, bool windows)
+        {
+            if (!windows) return $"This app cannot write in {folder}. " + LinuxWriteAdvice;
+            return $"Windows does not let this app write in {folder} (it never asks for administrator rights). " +
+                   (protectedLocation
+                       ? "Your game is in a protected Xbox/Windows folder: in the Xbox app, open Bannerlord > Manage > Files and enable \"Advanced management features\", or move the game to another folder."
+                       : "Check that the folder is not read-only and that Windows Security \"Controlled folder access\" allows LotRMPUpdater, or move the game to a folder you own (for example D:\\Games).");
+        }
+
+        /// <summary>Plan warning / blocker: the game or its launcher runs.</summary>
+        public static string GameRunningText(IEnumerable<string> processNames) => GameRunningText(processNames, OsPath.IsWindows);
+
+        internal static string GameRunningText(IEnumerable<string> processNames, bool windows) =>
+            "Bannerlord or its launcher is running (" + string.Join(", ", processNames) + "). Close it before updating: " +
+            (windows ? "Windows does not let anyone replace files the game is using." : "replacing files the game is using would break both the game and the update.");
 
         private static Exception Unwrap(Exception ex)
         {
@@ -217,7 +261,7 @@ namespace Lotr.Updater.Core.Install
         }
 
         internal static bool IsWorkshopPath(string path) =>
-            path != null && path.IndexOf(@"\workshop\content\", StringComparison.OrdinalIgnoreCase) >= 0;
+            path != null && (path.IndexOf(@"\workshop\content\", StringComparison.OrdinalIgnoreCase) >= 0 || path.IndexOf("/workshop/content/", StringComparison.OrdinalIgnoreCase) >= 0);
 
         /// <summary>Exception chain as "Type: message" lines (log and Details only, never the main text).</summary>
         public static string Technical(Exception ex)

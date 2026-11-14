@@ -111,7 +111,15 @@ namespace Lotr.Updater.Core.Logging
         {
             if (string.IsNullOrEmpty(text)) return text ?? "";
             var r = text;
-            if (!string.IsNullOrEmpty(profilePath) && profilePath.Length > 3)
+            if (!string.IsNullOrEmpty(profilePath) && profilePath.Length > 3 && profilePath[0] == '/')
+            {
+                // Linux / Steam Deck: /home/deck -> /home/<user> (lotr-services masks again server-side).
+                var t = profilePath.TrimEnd('/');
+                int slash = t.LastIndexOf('/');
+                var masked = (slash <= 0 ? "" : t.Substring(0, slash)) + "/<user>";
+                r = Regex.Replace(r, Regex.Escape(t) + "(?=[/\"'\\s]|$)", masked.Replace("$", "$$"));
+            }
+            else if (!string.IsNullOrEmpty(profilePath) && profilePath.Length > 3)
             {
                 // Same placeholder as lotr-services (which masks again server-side): C:\Users\<user>
                 var parent = System.IO.Path.GetDirectoryName(profilePath.TrimEnd('\\'));
@@ -123,8 +131,10 @@ namespace Lotr.Updater.Core.Logging
             r = Regex.Replace(r, @"(?i)([A-Z]:(?:\\|/)+Users(?:\\|/)+)[^\\/\s""']+~\d", "$1<user>"); // also JSON-escaped C:\\Users\\X~1
             if (!string.IsNullOrEmpty(userName) && userName.Length >= 2)
             {
-                r = Regex.Replace(r, @"(?i)([\\/]Users[\\/])" + Regex.Escape(userName) + @"(?=[\\/""'\s]|$)", "$1<user>");
-                r = Regex.Replace(r, @"(?i)(?<![0-9A-Za-z])" + Regex.Escape(userName) + @"(?![0-9A-Za-z])", "<user>");
+                r = Regex.Replace(r, @"(?i)([\\/](?:Users|home)[\\/])" + Regex.Escape(userName) + @"(?=[\\/""'\s]|$)", "$1<user>");
+                // "deck" is the Steam Deck's built-in account (it names nobody): masking the word would only blur "Steam Deck".
+                if (!string.Equals(userName, "deck", StringComparison.Ordinal))
+                    r = Regex.Replace(r, @"(?i)(?<![0-9A-Za-z])" + Regex.Escape(userName) + @"(?![0-9A-Za-z])", "<user>");
             }
             if (!string.IsNullOrEmpty(machineName) && machineName.Length >= 3)
                 r = Regex.Replace(r, @"(?i)(?<![0-9A-Za-z])" + Regex.Escape(machineName) + @"(?![0-9A-Za-z])", "<pc>");

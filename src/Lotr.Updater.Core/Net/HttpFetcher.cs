@@ -139,15 +139,21 @@ namespace Lotr.Updater.Core.Net
             }
         }
 
-        public async Task<string> PostJsonAsync(Uri uri, string json, CancellationToken ct, Func<HttpResponseMessage, string, Task<bool>> handleNonSuccess = null)
+        /// <param name="timeout">Whole-call limit (headers and body). Null = no limit of its own (the caller's token only). When it
+        /// runs out, a <see cref="TaskCanceledException"/> is thrown while <paramref name="ct"/> is still not cancelled.</param>
+        public async Task<string> PostJsonAsync(Uri uri, string json, CancellationToken ct, Func<HttpResponseMessage, string, Task<bool>> handleNonSuccess = null, TimeSpan? timeout = null)
         {
-            using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-            using (var resp = await _http.PostAsync(uri, content, ct).ConfigureAwait(false))
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                var body = Encoding.UTF8.GetString(await ReadLimitedAsync(resp.Content, 1L << 20, uri, ct).ConfigureAwait(false));
-                if (resp.IsSuccessStatusCode) return body;
-                if (handleNonSuccess != null && await handleNonSuccess(resp, body).ConfigureAwait(false)) return null;
-                throw new HttpFetchException($"The server answered {(int)resp.StatusCode} {resp.ReasonPhrase}", resp.StatusCode);
+                if (timeout.HasValue) cts.CancelAfter(timeout.Value);
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                using (var resp = await _http.PostAsync(uri, content, cts.Token).ConfigureAwait(false))
+                {
+                    var body = Encoding.UTF8.GetString(await ReadLimitedAsync(resp.Content, 1L << 20, uri, cts.Token).ConfigureAwait(false));
+                    if (resp.IsSuccessStatusCode) return body;
+                    if (handleNonSuccess != null && await handleNonSuccess(resp, body).ConfigureAwait(false)) return null;
+                    throw new HttpFetchException($"The server answered {(int)resp.StatusCode} {resp.ReasonPhrase}", resp.StatusCode);
+                }
             }
         }
 

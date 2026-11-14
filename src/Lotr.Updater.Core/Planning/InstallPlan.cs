@@ -103,7 +103,7 @@ namespace Lotr.Updater.Core.Planning
         /// <summary>Size and date of every local file the plan reuses (CopyLocal sources, files giving reused chunks), as seen
         /// when the plan was made. The engine re-checks them right before applying: a plan can be hours old, and Steam deletes
         /// or rewrites Workshop files on its own (unsubscribe, item update).</summary>
-        public Dictionary<string, SourceStamp> SourceStamps { get; } = new Dictionary<string, SourceStamp>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, SourceStamp> SourceStamps { get; } = new Dictionary<string, SourceStamp>(LotR.Releases.Model.OsPath.Comparer);
     }
 
     public struct SourceStamp

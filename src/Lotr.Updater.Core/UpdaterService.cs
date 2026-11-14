@@ -48,6 +48,8 @@ namespace Lotr.Updater.Core
         public bool UpToDate => Plan != null && !Plan.HasChanges;
         /// <summary>The server offers an OLDER release than the installed one (CONTRACTS §8 anti-rollback): only installed after the player agrees.</summary>
         public bool RollbackOffered { get; set; }
+        /// <summary>The server's release was refused (signature, manifest rules, channel): not a network problem.</summary>
+        public bool ReleaseRefused { get; set; }
     }
 
     /// <summary>Everything the UI needs, wired once. No UI types here.</summary>
@@ -161,7 +163,7 @@ namespace Lotr.Updater.Core
         {
             var sm = await Source.GetManifestAsync(releaseId, ct).ConfigureAwait(false);
             var v = Verifier.Verify(sm.Bytes, sm.Signature);
-            if (!v.Trusted) throw new InstallException(v.Message);
+            if (!v.Trusted) throw new InstallException(v.Message) { Kind = ProblemKind.ReleaseRefused };
             // Signature checked BEFORE parsing anything (docs/MANIFEST.md §4), then the strict parser + validator.
             var m = ManifestCodec.Parse(sm.Bytes);
             var val = ManifestValidator.Validate(m);
@@ -169,7 +171,7 @@ namespace Lotr.Updater.Core
             foreach (var w in val.Warnings) Log.Detail("Manifest: " + w);
             var rule = UpdaterManifestRules.Check(m);
             if (rule != null) throw new ManifestException("The release was refused: " + rule);
-            if (m.ReleaseId != releaseId) throw new InstallException("The release index and the release file disagree (" + releaseId + " vs " + m.ReleaseId + "); refused.");
+            if (m.ReleaseId != releaseId) throw new InstallException("The release index and the release file disagree (" + releaseId + " vs " + m.ReleaseId + "); refused.") { Kind = ProblemKind.ReleaseRefused };
             return (m, v, sm.Bytes);
         }
 
@@ -240,6 +242,7 @@ namespace Lotr.Updater.Core
         {
             var r = new CheckResult();
             if (Game == null) { r.Error = "Bannerlord was not found. Choose its folder in Settings."; return r; }
+            bool planning = false;
             try
             {
                 status?.Report("Asking the server for the current release…");
@@ -266,6 +269,7 @@ namespace Lotr.Updater.Core
                     return r;
                 }
                 status?.Report("Comparing with the files on your PC…");
+                planning = true;
                 r.Plan = await Planner.PlanAsync(m, bytes, Game, installed, State.InstalledReleaseId, forceHash: false, status, ct).ConfigureAwait(false);
                 r.Plan.SignatureStatus = v.Message;
                 Engine.Preflight(r.Plan, forApply: false);
@@ -289,6 +293,7 @@ namespace Lotr.Updater.Core
                 var p = PlayerErrors.ForCheck(ex);
                 r.Error = p.Message;
                 r.ErrorDetail = p.Detail;
+                r.ReleaseRefused = !planning && (ex is ManifestException || p.Kind == ProblemKind.ReleaseRefused);
                 Log.Error("Check failed: " + PlayerErrors.Technical(ex));
             }
             return r;
@@ -391,7 +396,9 @@ namespace Lotr.Updater.Core
             sb.AppendLine("Channel: " + State.Channel);
             sb.AppendLine("Installed release: " + (State.InstalledReleaseId ?? "none"));
             sb.AppendLine("Install id: " + State.InstallId);
-            sb.AppendLine($"Windows {Environment.OSVersion.VersionString}  64-bit {Environment.Is64BitOperatingSystem}");
+            sb.AppendLine(LotR.Releases.Model.OsPath.IsWindows
+                ? $"Windows {Environment.OSVersion.VersionString}  64-bit {Environment.Is64BitOperatingSystem}"
+                : $"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}  64-bit {Environment.Is64BitOperatingSystem}");
             if (Game != null) sb.AppendLine($"Game: {Game.StoreLabel} {Game.GameVersion} at {Game.Root} (writable {Game.Writable})");
             if (LastSearch?.ReportForLog != null) { sb.AppendLine("--- game detection ---"); sb.AppendLine(LastSearch.ReportForLog); }
             // A start-up crash leaves logs\crash-*.txt (written by the start-up guard): the most recent one of the last 7 days

@@ -43,12 +43,18 @@ Commands:
              runs tools/security (VirusTotal / Hybrid Analysis) -> <releaseDir>\security.json (unsigned sidecar);
              services without an API key are skipped by that script; exit 3 = run again later
   export-site-json --out <site>\src\data\releases.json [--channel stable] [--updater-latest <latest.json>]
+             [--updater-linux-latest <linux\latest.json>]   (default: linux\latest.json next to the Windows one;
+             written as ""updaterLinux"", null when absent, unsigned or not ours)
   verify-install <moduleFolder> --release <releaseDir> [--quick]   compare an installed module with a release
   publish-updater --exe <LotRMPUpdater.exe> [--root R | --updater-dir <files\updater>] [--channel stable]
              [--version 1.2.3] [--base-url https://domain] [--key <file>] [--no-sign] [--force] [--json]
              writes LotRMPUpdater-<version>.exe + .sha256 + latest.json (latest-<channel>.json for other channels),
              each atomically, latest.json last; latest.json.sig with the release key (default: the --root key, else
              the PC key %USERPROFILE%\.lotrmp\release-signing.key)
+  publish-updater --platform linux --archive <lotr-updater-<version>-linux-x64.tar.gz> [--root R | --updater-dir <files\updater>]
+             [--version 1.2.3] [--base-url https://domain] [--key <file>] [--no-sign] [--force] [--json]
+             the Linux updater (docs/LINUX.md), versioned on its own: checks the archive (lotr-updater ELF x86-64
+             inside, nothing odd), writes <updater-dir>\linux\ the .tar.gz + .sha256 + latest.json (last) + latest.json.sig
 
 Team signing (docs/TEAM-SIGNING.md): the release key stays on team members' PCs, the server only verifies.
   pending    [--root R] [--json]                           the release waiting for the team signature, if any
@@ -59,7 +65,8 @@ Team signing (docs/TEAM-SIGNING.md): the release key stays on team members' PCs,
              and every changed module file by file against the local folders, asks, signs
              -> <signedDir>\releases\<id>\manifest.json.sig. Exit 0 also when nothing is pending; 1 refused; 3 declined.
   apply-signed --from <signedDir> [--root R] [--pub ..] [--force] [--json]
-             server side: installs <signedDir>\updater\ (signed latest.json + exe; never a downgrade) and
+             server side: installs <signedDir>\updater\ (signed latest.json + exe; never a downgrade),
+             <signedDir>\updater\linux\ (signed latest.json + .tar.gz, same rules) and
              <signedDir>\releases\<id>\manifest.json.sig (verified, whole release re-verified, channel moved)
 
 <modules>: --event <dir> [--core <dir>] [--admin-client <dir>] [--workshop event=3774022783] [--exclude <glob>]
@@ -706,7 +713,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             string output = a.One("out") ?? throw new UsageException("--out <site>\\src\\data\\releases.json");
             var warnings = new List<string>();
             string latest = a.One("updater-latest") ?? (a.Root != null ? Path.Combine(a.Root, "files", "updater", "latest.json") : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(a.Releases)), "updater", "latest.json"));
-            var data = SiteExporter.Build(a.Releases, a.One("channel") ?? "stable", Trusted(a), latest, warnings);
+            var data = SiteExporter.Build(a.Releases, a.One("channel") ?? "stable", Trusted(a), latest, warnings, a.One("updater-linux-latest"));
             SiteExporter.Write(output, data);
             foreach (var w in warnings)
             {
@@ -714,6 +721,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             }
 
             Console.WriteLine("wrote " + Path.GetFullPath(output) + " (current: " + (data["current"] is JsonObject c ? c["releaseId"].AsString() : "null") + ")");
+            Console.WriteLine("linux updater: " + (data["updaterLinux"] is JsonObject lu ? lu["version"].AsString() : "(none)"));
             return 0;
         }
 
@@ -756,8 +764,24 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
 
         private static int PublishUpdater(Args a)
         {
+            string platform = (a.One("platform") ?? "windows").ToLowerInvariant();
+            if (platform == "linux")
+            {
+                return PublishLinuxUpdater(a);
+            }
+
+            if (platform != "windows")
+            {
+                throw new UsageException("--platform windows|linux");
+            }
+
+            if (a.One("archive") != null)
+            {
+                throw new UsageException("--archive is for --platform linux (the Windows updater takes --exe)");
+            }
+
             string exe = a.One("exe") ?? throw new UsageException("--exe <LotRMPUpdater.exe>");
-            string dir = a.One("updater-dir") ?? (a.Root != null ? Path.Combine(a.Root, "files", "updater") : throw new UsageException("give --root <deployRoot> or --updater-dir <files\\updater>"));
+            string dir = UpdaterDir(a);
             var req = new UpdaterPublishRequest
             {
                 ExePath = exe,
@@ -767,24 +791,7 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
                 BaseUrl = a.One("base-url"),
                 Force = a.Flag("force"),
             };
-            if (!a.Flag("no-sign"))
-            {
-                var keys = a.Many("key").ToList();
-                if (keys.Count == 0 && a.DefaultKey != null && File.Exists(a.DefaultKey))
-                {
-                    keys.Add(a.DefaultKey);
-                }
-
-                if (keys.Count == 0 && a.Root == null && File.Exists(KeyStore.DefaultPcKeyPath))
-                {
-                    keys.Add(KeyStore.DefaultPcKeyPath);
-                }
-
-                foreach (var k in keys)
-                {
-                    req.Signers.Add(new ReleaseSigner(KeyStore.Load(k)));
-                }
-            }
+            req.Signers.AddRange(UpdaterSigners(a));
 
             UpdaterPublishResult r;
             try
@@ -833,6 +840,122 @@ Exit codes: 0 ok, 1 failed / verification error, 2 usage error.";
             }
 
             return 0;
+        }
+
+        /// <summary>publish-updater --platform linux: the .tar.gz of tools/Build-LinuxUpdater.ps1 into &lt;updater-dir&gt;\linux\.</summary>
+        private static int PublishLinuxUpdater(Args a)
+        {
+            if (a.One("exe") != null)
+            {
+                throw new UsageException("--exe is for the Windows updater; --platform linux takes --archive <lotr-updater-<version>-linux-x64.tar.gz>");
+            }
+
+            if (a.One("channel") != null && a.One("channel") != "stable")
+            {
+                throw new UsageException("the Linux updater has no channels (one linux\\latest.json)");
+            }
+
+            string archive = a.One("archive") ?? throw new UsageException("--archive <lotr-updater-<version>-linux-x64.tar.gz>");
+            var req = new LinuxUpdaterPublishRequest
+            {
+                ArchivePath = archive,
+                UpdaterDir = UpdaterDir(a),
+                Version = a.One("version"),
+                BaseUrl = a.One("base-url"),
+                Force = a.Flag("force"),
+            };
+            req.Signers.AddRange(UpdaterSigners(a));
+
+            LinuxUpdaterPublishResult r;
+            try
+            {
+                r = LinuxUpdaterPublisher.Publish(req);
+            }
+            finally
+            {
+                foreach (var s in req.Signers)
+                {
+                    s.Dispose();
+                }
+            }
+
+            if (a.Flag("json"))
+            {
+                Console.WriteLine(JsonWriter.ToPrettyString(new JsonObject
+                {
+                    ["ok"] = true,
+                    ["platform"] = "linux",
+                    ["latest"] = r.Latest.ToJson(),
+                    ["archive"] = r.ArchiveFile,
+                    ["sha256File"] = r.Sha256File,
+                    ["latestFile"] = r.LatestFile,
+                    ["signatureFile"] = r.SignatureFile,
+                    ["programSize"] = r.Archive.ProgramSize,
+                    ["alreadyPublished"] = r.AlreadyPublished,
+                }));
+            }
+            else
+            {
+                Console.WriteLine("linux updater: " + r.Latest.Version + " (" + Mb(r.Latest.Size) + ", sha256 " + r.Latest.Sha256 + ")");
+                Console.WriteLine("archive      : " + string.Join(", ", r.Archive.Entries) + " (program " + Mb(r.Archive.ProgramSize) + ", ELF x86-64, executable)");
+                Console.WriteLine("wrote        : " + r.ArchiveFile + (r.AlreadyPublished ? " (already there, same bytes)" : string.Empty));
+                Console.WriteLine("wrote        : " + r.Sha256File);
+                if (r.SignatureFile != null)
+                {
+                    Console.WriteLine("wrote        : " + r.SignatureFile);
+                }
+                else
+                {
+                    Console.Error.WriteLine("warning: linux\\latest.json is not signed with the release key (no --key / --root key, or --no-sign): the site will not offer it");
+                }
+
+                Console.WriteLine("wrote        : " + r.LatestFile);
+            }
+
+            return 0;
+        }
+
+        private static string UpdaterDir(Args a) =>
+            a.One("updater-dir") ?? (a.Root != null ? Path.Combine(a.Root, "files", "updater") : throw new UsageException("give --root <deployRoot> or --updater-dir <files\\updater>"));
+
+        /// <summary>The release keys publish-updater signs latest.json with: --key, else the --root key, else the PC key (none with --no-sign).</summary>
+        private static List<ReleaseSigner> UpdaterSigners(Args a)
+        {
+            var signers = new List<ReleaseSigner>();
+            if (a.Flag("no-sign"))
+            {
+                return signers;
+            }
+
+            var keys = a.Many("key").ToList();
+            if (keys.Count == 0 && a.DefaultKey != null && File.Exists(a.DefaultKey))
+            {
+                keys.Add(a.DefaultKey);
+            }
+
+            if (keys.Count == 0 && a.Root == null && File.Exists(KeyStore.DefaultPcKeyPath))
+            {
+                keys.Add(KeyStore.DefaultPcKeyPath);
+            }
+
+            try
+            {
+                foreach (var k in keys)
+                {
+                    signers.Add(new ReleaseSigner(KeyStore.Load(k)));
+                }
+            }
+            catch
+            {
+                foreach (var s in signers)
+                {
+                    s.Dispose();
+                }
+
+                throw;
+            }
+
+            return signers;
         }
 
         internal static string Mb(long bytes) => (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";

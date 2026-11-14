@@ -54,14 +54,14 @@ namespace Lotr.Updater.Testing
         /// <summary>Publishes under &lt;releasesRoot&gt; (= what the server serves at /files/releases/) and points the channel to it.</summary>
         public void WriteTo(string releasesRoot, bool updateChannel = true)
         {
-            var src = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(releasesRoot).TrimEnd('\\'))), "module-sources", Guid.NewGuid().ToString("N").Substring(0, 8));
+            var src = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(releasesRoot).TrimEnd('\\', '/'))), "module-sources", Guid.NewGuid().ToString("N").Substring(0, 8));
             var sources = new List<ModuleSource>();
             foreach (var m in Modules)
             {
                 var dir = Path.Combine(src, m.Folder);
                 foreach (var f in m.Files)
                 {
-                    var p = Path.Combine(dir, f.Path.Replace('/', '\\'));
+                    var p = Path.Combine(dir, f.Path.Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(p));
                     File.WriteAllBytes(p, f.Content);
                 }

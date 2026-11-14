@@ -43,10 +43,11 @@ powershell -ExecutionPolicy Bypass -File tools\rehearsal\Run-Rehearsal.ps1 [-Kee
 | `src/LotR.Releases` | netstandard2.0, net48 | manifest model, canonical JSON, ECDSA signatures, zstd/FastCDC, publish + verification, Authenticode check |
 | `src/Lotr.Updater.Core` | netstandard2.0, net48 | install engine, queue client, self-update, headless runner (no UI types) |
 | `src/Lotr.Updater` | net48 WPF | `LotRMPUpdater.exe` (single file, embedded DLLs and fonts) |
+| `src/Lotr.Updater.Cli` | net8.0 | `lotr-updater`, the Linux / Steam Deck updater (terminal, same Core engine) — `docs/LINUX.md` |
 | `tools/LotR.Publish` | net48 | `lotr-publish` (keys, plan, publish, verify, channels, scans, site JSON, `publish-updater`) — `docs/MANIFEST.md` |
 | `tools/security/Lotr.Security` | net48 | `lotr-security` (VirusTotal / Hybrid Analysis) — `docs/SECURITY-AUTOMATION.md` |
 | `services/lotr-services` | Node 24 | Core download queue + support codes (loopback, behind Caddy) |
-| `tests/*`, `tools/security/Lotr.Security.Tests` | net8.0 + net48 (security: net48) | xUnit; `tests/Lotr.Updater.DevServer` = dev helper (fake game, fake Core, local server) |
+| `tests/*`, `tools/security/Lotr.Security.Tests` | net8.0 + net48 (security: net48; `Lotr.Updater.Cli.Tests`: net8.0) | xUnit; `tests/Lotr.Updater.DevServer` = dev helper (fake game, fake Core, local server, `demo` bench for `tools/linux/e2e-local.sh`) |
 
 **Release build of the updater**: `dotnet build src/Lotr.Updater -c Release` fails (`LOTR001`) until the production
 release key is pasted in `src/Lotr.Updater.Core/Security/Keys/` (`docs/MANIFEST.md`, "Production key");
@@ -63,3 +64,8 @@ stops every process it started by PID and deletes the folder (`-Keep` keeps it).
 --home <temp> --game <fake game> --trust <test .pub.pem>` (`--tour <dir>` saves screenshots, `--headless --report <file>
 [--self-update] [--check-only] [--send-support]` runs without a window). Fonts: `tools/fonts/make_updater_fonts.py`
 rebuilds `src/Lotr.Updater/Resources/Fonts/` from the site's OFL packages.
+
+**Linux / Steam Deck** (`docs/LINUX.md`): `tools\Build-LinuxUpdater.ps1 -Domain <domain>` builds `lotr-updater` for
+linux-x64 on this PC and packs `dist\updater\lotr-updater-<version>-linux-x64.tar.gz`; `lotr-publish publish-updater
+--platform linux --archive <it>` signs it into `files\updater\linux\` (own `latest.json`, never the Windows one);
+`tools/linux/e2e-local.sh` runs the real binaries against a local fake release (Linux, WSL, or Git Bash with win-x64 builds).

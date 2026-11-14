@@ -38,6 +38,13 @@ exception text (`PlayerErrors.LooksTechnical`) and of non-English letters.
 | 26 | Duplicate module copy under another folder name | `Duplicate_copy_under_another_folder_name_is_warned_and_left_alone` | warning, the copy is not touched |
 | 27 | Start-up crash report | `Start_up_crash_report_travels_with_the_support_log` | latest `logs\crash-*.txt` included in the support log |
 | 28 | Wording | `The_reported_french_exception_becomes_a_calm_english_message`, `Every_install_message_is_friendly` | no raw exception text for any mapped error |
+| 29 | Download queue down (Cloudflare 530/502/520, 503, 500, 403, 408, 200 with an HTML page) | `QueueFallbackTests.A_broken_queue_gets_one_more_try_then_the_core_is_downloaded_directly` (x8) | one more try after 2 s, then the Core is downloaded directly, a warning is logged, install succeeds |
+| 30 | Download queue never answers | `QueueFallbackTests.A_queue_that_never_answers_is_given_up_after_the_timeout` | per-call timeout (15 s in production), then direct download |
+| 31 | No queue (404), busy queue (429), cancel while waiting or while it hangs | `QueueFallbackTests` (4 tests) | 404 = direct at once; 429 still waited for; the player's cancel stops at once |
+| 32 | Linux: game in native / Flatpak / Snap Steam, several libraries, old and new `libraryfolders.vdf`, SD card, symlinks, `SteamApps` letter case, broken VDF | `LinuxSteamLocatorTests` (19 tests) | found once, at its real on-disk name, Proton prefix reported |
+| 33 | Linux: stale mod file under another letter case | `LinuxSupportTests.With_linux_rules_a_letter_case_copy_of_a_release_file_is_moved_to_the_backup`, `With_windows_rules_letter_case_never_makes_a_copy` | moved to the backup with an Info line (Windows rules: nothing to do) |
+| 34 | Linux: disk full / quota / read-only file system, wording | `LinuxSupportTests` | `ENOSPC`, `EDQUOT`, `EROFS` mapped to the calm messages, no "Windows" in Linux texts |
+| 35 | `lotr-updater` command line, end to end | `tests/Lotr.Updater.Cli.Tests` + `tools/linux/e2e-local.sh` | exit codes 0/2/3/4/6/7/8/9/10/130 as documented in `docs/LINUX.md` |
 
 ## Run
 

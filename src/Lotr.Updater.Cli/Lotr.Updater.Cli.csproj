@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- lotr-updater: the Linux / Steam Deck updater (docs/LINUX.md). A terminal app on the same engine as the Windows
+       LotRMPUpdater.exe (Lotr.Updater.Core: same signature check, same install engine and journal). It also runs on Windows,
+       which is how its tests run. Player build (one self-contained ELF file, ~12 MB):
+         dotnet publish src/Lotr.Updater.Cli -c Release -r linux-x64 -p:LotrBaseUrl=https://middleearthevent.com
+       (tools/Build-LinuxUpdater.ps1 does it and packs the .tar.gz). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>lotr-updater</AssemblyName>
+    <RootNamespace>Lotr.Updater.Cli</RootNamespace>
+    <!-- Its own number: the Linux updater is released on its own (docs/LINUX.md, "Publishing"). -->
+    <Version>0.1.0</Version>
+    <IsPackable>false</IsPackable>
+    <DebugType>embedded</DebugType>
+    <!-- No ICU on SteamOS / minimal distros: every text the updater handles is invariant (paths, JSON, English). -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
+    <EnableCompressionInSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</EnableCompressionInSingleFile>
+    <!-- Trimming lives here, not on the command line (it would also reach the netstandard2.0 libraries: NETSDK1124).
+         partial = only framework assemblies are trimmed; ours stay whole. Zero trim warnings expected. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Lotr.Updater.Core\Lotr.Updater.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lotr.Updater.Cli.Tests" />
+  </ItemGroup>
+  <!-- A published Release binary must carry the production release key and server, exactly like the Windows exe
+       (src/Lotr.Updater/Lotr.Updater.csproj, CheckProductionKey). Builds (tests) are not concerned. -->
+  <Target Name="CheckProductionKey" BeforeTargets="CoreCompile" Condition="'$(Configuration)' == 'Release' And '$(_IsPublishing)' == 'true' And '$(AllowNoProductionKey)' != 'true'">
+    <ItemGroup>
+      <_LotrProductionKey Include="..\Lotr.Updater.Core\Security\Keys\*.pub.pem" />
+    </ItemGroup>
+    <Error Condition="'@(_LotrProductionKey)' == ''" Code="LOTR001"
+           Text="No production release key embedded: put release-signing.pub.pem in src\Lotr.Updater.Core\Security\Keys\ (see docs/MANIFEST.md, Production key), or publish with -p:AllowNoProductionKey=true for a test binary that refuses every release." />
+    <Error Condition="'$(LotrBaseUrl)' == ''" Code="LOTR002"
+           Text="No production server: publish with -p:LotrBaseUrl=https://&lt;your-domain&gt; (tools/Build-LinuxUpdater.ps1 does it), or -p:AllowNoProductionKey=true for a test binary." />
+  </Target>
+</Project>

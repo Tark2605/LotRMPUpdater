@@ -268,6 +268,30 @@ namespace LotR.Publish
                 }
             }
 
+            // The Linux updater (docs/LINUX.md): <signed>\updater\linux\ -> <updater-dir>\linux\, same rules.
+            string linuxLatest = UpdaterInstaller.LinuxLatestFile(srcUpdater);
+            if (linuxLatest != null)
+            {
+                try
+                {
+                    if (updaterDir == null)
+                    {
+                        throw new UsageException("give --root or --updater-dir to install linux\\latest.json");
+                    }
+
+                    var r = UpdaterInstaller.ApplyLinux(linuxLatest, Path.Combine(updaterDir, LinuxUpdaterArchive.Folder), trusted, force);
+                    upd.Add(new JsonObject { ["file"] = LinuxUpdaterArchive.Folder + "/latest.json", ["platform"] = "linux", ["version"] = r.Version, ["previous"] = r.PreviousVersion, ["alreadyLive"] = r.AlreadyLive });
+                    if (!json)
+                    {
+                        Console.WriteLine("linux updater: " + (r.AlreadyLive ? r.Version + " already live (same signed latest.json)" : (r.PreviousVersion ?? "-") + " -> " + r.Version + " (" + r.SignedBy + ")"));
+                    }
+                }
+                catch (Exception e) when (!(e is OutOfMemoryException))
+                {
+                    errors.Add("linux updater: " + e.Message);
+                }
+            }
+
             string srcReleases = Path.Combine(from, "releases");
             if (Directory.Exists(srcReleases))
             {

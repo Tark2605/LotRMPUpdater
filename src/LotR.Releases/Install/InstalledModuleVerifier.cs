@@ -67,7 +67,10 @@ namespace LotR.Releases.Install
     /// <summary>Compares an installed module folder with a (verified) manifest module.</summary>
     public static class InstalledModuleVerifier
     {
-        public static InstallCheck Verify(string moduleFolder, ManifestModule module, InstallCheckMode mode = InstallCheckMode.Full, int threads = 4, IProgress<long> bytesProgress = null, CancellationToken cancel = default)
+        /// <param name="pathComparer">How listed paths are matched with the files on disk; default <see cref="OsPath.Comparer"/>
+        /// (case-insensitive on Windows; exact on Linux, so a stale "moduledata/a.xml" next to "ModuleData/a.xml" is Extra).</param>
+        public static InstallCheck Verify(string moduleFolder, ManifestModule module, InstallCheckMode mode = InstallCheckMode.Full, int threads = 4, IProgress<long> bytesProgress = null, CancellationToken cancel = default,
+            StringComparer pathComparer = null)
         {
             var check = new InstallCheck { ModuleId = module.Id, ModuleFolder = Path.GetFullPath(moduleFolder) };
             var results = new InstalledFile[module.Files.Count];
@@ -119,7 +122,7 @@ namespace LotR.Releases.Install
             check.BytesHashed = hashed;
             if (Directory.Exists(moduleFolder))
             {
-                var listed = new HashSet<string>(module.Files.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+                var listed = new HashSet<string>(module.Files.Select(f => f.Path), pathComparer ?? OsPath.Comparer);
                 foreach (var file in Directory.EnumerateFiles(moduleFolder, "*", SearchOption.AllDirectories))
                 {
                     string rel = RelativePath.FromFileSystem(moduleFolder, file);

@@ -24,6 +24,12 @@ namespace Lotr.Updater.Core.Game
         public string BinFolderName { get; set; }
         public string Evidence { get; set; }
         public List<string> Warnings { get; } = new List<string>();
+        /// <summary>Linux (Steam Proton) only: the game's Wine prefix, &lt;library&gt;/steamapps/compatdata/261550/pfx, when it exists.
+        /// Informational (detect / support log); nothing is written there.</summary>
+        public string ProtonPrefix { get; set; }
+        /// <summary>Linux only: the official launcher's mod list inside <see cref="ProtonPrefix"/> (Documents/Mount and Blade II
+        /// Bannerlord/Configs/LauncherData.xml), when it exists. Informational.</summary>
+        public string LauncherDataPath { get; set; }
 
         public string StoreLabel
         {
@@ -270,7 +276,8 @@ namespace Lotr.Updater.Core.Game
             {
                 var id = ReadModuleId(fs, folder);
                 if (id == null || !ours.TryGetValue(id, out var expectedFolder)) return;
-                bool isTarget = !workshop && string.Equals(Path.GetFileName(folder), expectedFolder, StringComparison.OrdinalIgnoreCase);
+                // Linux: "lotrmpcore" is another folder than "LotRMPCore" (the one the updater installs), so it counts as a copy.
+                bool isTarget = !workshop && string.Equals(Path.GetFileName(folder), expectedFolder, OsPath.Comparison);
                 if (!isTarget) result.Add(new DuplicateModule { Id = id, Path = folder, Where = where, IsWorkshop = workshop, WorkshopItem = workshop ? item : null });
             }
             foreach (var d in SteamWorkshop.SafeDirs(fs, game.ModulesPath)) Check(d, "Modules", false);

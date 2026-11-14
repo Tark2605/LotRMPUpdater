@@ -105,14 +105,16 @@ namespace LotR.Releases.Model
         /// <summary>Converts a file under <paramref name="root"/> to a manifest path ('/' separators).</summary>
         public static string FromFileSystem(string root, string fullPath)
         {
-            string r = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            string r = OsPath.WithTrailingSeparator(Path.GetFullPath(root));
             string f = Path.GetFullPath(fullPath);
-            if (!f.StartsWith(r, StringComparison.OrdinalIgnoreCase))
+            if (!f.StartsWith(r, OsPath.Comparison))
             {
                 throw new ArgumentException("'" + fullPath + "' is not under '" + root + "'");
             }
 
-            return f.Substring(r.Length).Replace('\\', '/');
+            // On Linux '\' is an ordinary file name character, not a separator.
+            string rel = f.Substring(r.Length);
+            return Path.DirectorySeparatorChar == '/' ? rel : rel.Replace(Path.DirectorySeparatorChar, '/');
         }
 
         /// <summary>
@@ -126,9 +128,9 @@ namespace LotR.Releases.Model
                 throw new InvalidDataException("Unsafe manifest path '" + manifestPath + "': " + why);
             }
 
-            string root = Path.GetFullPath(moduleFolder).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            string root = OsPath.WithTrailingSeparator(Path.GetFullPath(moduleFolder));
             string full = Path.GetFullPath(Path.Combine(root, manifestPath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            if (!full.StartsWith(root, OsPath.Comparison))
             {
                 throw new InvalidDataException("Manifest path '" + manifestPath + "' escapes the module folder");
             }

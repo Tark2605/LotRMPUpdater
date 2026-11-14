@@ -16,6 +16,7 @@ namespace LotR.Releases.Publishing
     //   PC      sign-release               -> fetches the pending manifest, checks every CHANGED module file by file against
     //                                         the PC's own copy of the modules, signs -> <signed>\releases\<id>\manifest.json.sig
     //   PC      publish-updater            -> <signed>\updater\ (exe, .sha256, latest.json, latest.json.sig)
+    //   PC      publish-updater --platform linux -> <signed>\updater\linux\ (.tar.gz, .sha256, latest.json, latest.json.sig)
     //   server  apply-signed               -> verifies every signature with the public key, installs them, moves the channel
     // A hacked server can publish whatever it wants as "pending", but nothing gets a valid signature unless a team PC
     // holds the same files; and the server never holds anything it could sign with.
@@ -546,6 +547,8 @@ namespace LotR.Releases.Publishing
     /// Installs an updater release signed on a team PC (lotr-publish publish-updater --updater-dir &lt;signed&gt;\updater):
     /// latest.json must verify with the trusted key, the exe must match it (name, size, SHA-256), never a downgrade.
     /// Writes exe, .sha256 (recomputed here), latest.json.sig, then latest.json last, each atomically.
+    /// <see cref="ApplyLinux"/> does the same for the Linux download (&lt;signed&gt;\updater\linux\, see
+    /// <see cref="LinuxUpdaterArchive"/>), whose archive is also inspected (the lotr-updater ELF inside, nothing odd).
     /// </summary>
     public static class UpdaterInstaller
     {
@@ -553,6 +556,13 @@ namespace LotR.Releases.Publishing
 
         public static IEnumerable<string> LatestFiles(string srcDir) =>
             Directory.Exists(srcDir) ? Directory.GetFiles(srcDir, "latest*.json").Where(f => LatestName.IsMatch(Path.GetFileName(f))).OrderBy(f => f, StringComparer.Ordinal) : Enumerable.Empty<string>();
+
+        /// <summary>&lt;srcUpdaterDir&gt;\linux\latest.json when a team PC signed a Linux updater, else null.</summary>
+        public static string LinuxLatestFile(string srcUpdaterDir)
+        {
+            string f = Path.Combine(srcUpdaterDir, LinuxUpdaterArchive.Folder, UpdaterPublisher.LatestFileName("stable"));
+            return File.Exists(f) ? f : null;
+        }
 
         public static UpdaterApplyResult Apply(string srcLatestFile, string updaterDir, IList<TrustedKey> trusted, bool force = false)
         {
@@ -562,6 +572,52 @@ namespace LotR.Releases.Publishing
                 throw new ArgumentException(name + " is not latest.json / latest-<channel>.json");
             }
 
+            return Install(
+                srcLatestFile,
+                updaterDir,
+                trusted,
+                force,
+                UpdaterPublisher.ExeFileName,
+                latest =>
+                {
+                    string expectedPath = "/files/updater/" + UpdaterPublisher.ExeFileName(latest.Version);
+                    bool urlOk = latest.Url == expectedPath || (latest.Url.StartsWith("https://", StringComparison.Ordinal) && latest.Url.EndsWith(expectedPath, StringComparison.Ordinal) && latest.Url.IndexOf('/', 8) == latest.Url.Length - expectedPath.Length);
+                    return urlOk ? null : expectedPath;
+                },
+                null);
+        }
+
+        /// <summary>
+        /// The Linux updater: &lt;signed&gt;\updater\linux\latest.json (+ .sig) and its .tar.gz into <paramref name="linuxDir"/>
+        /// (the server's files\updater\linux). Same rules as <see cref="Apply"/>; the url must be
+        /// /files/updater/linux/lotr-updater-&lt;version&gt;-linux-x64.tar.gz (or https://host + that) and the archive must
+        /// pass <see cref="LinuxUpdaterArchive.Inspect"/>.
+        /// </summary>
+        public static UpdaterApplyResult ApplyLinux(string srcLatestFile, string linuxDir, IList<TrustedKey> trusted, bool force = false)
+        {
+            string name = Path.GetFileName(srcLatestFile);
+            if (name != UpdaterPublisher.LatestFileName("stable"))
+            {
+                throw new ArgumentException(name + " is not latest.json (the Linux updater has no channels)");
+            }
+
+            return Install(
+                srcLatestFile,
+                linuxDir,
+                trusted,
+                force,
+                LinuxUpdaterArchive.FileName,
+                latest => LinuxUpdaterArchive.IsOwnUrl(latest.Url, latest.Version) ? null : LinuxUpdaterArchive.UrlPath(latest.Version),
+                (bytes, latest) => LinuxUpdaterArchive.Inspect(bytes, latest.Version));
+        }
+
+        /// <param name="payloadName">version -> the file latest.json points at (the exe, or the Linux archive).</param>
+        /// <param name="urlProblem">null when latest.json's url is this server's file, else the expected path.</param>
+        /// <param name="payloadCheck">extra check of the payload bytes (throws <see cref="InvalidDataException"/>), or null.</param>
+        private static UpdaterApplyResult Install(string srcLatestFile, string updaterDir, IList<TrustedKey> trusted, bool force, Func<string, string> payloadName,
+            Func<UpdaterLatest, string> urlProblem, Action<byte[], UpdaterLatest> payloadCheck)
+        {
+            string name = Path.GetFileName(srcLatestFile);
             if (trusted == null || trusted.Count == 0)
             {
                 throw new InvalidOperationException("no trusted public key to check latest.json with");
@@ -588,14 +644,13 @@ namespace LotR.Releases.Publishing
                 throw new InvalidDataException(name + " is invalid: " + string.Join("; ", val.Errors));
             }
 
-            string exeName = UpdaterPublisher.ExeFileName(latest.Version);
-            string expectedPath = "/files/updater/" + exeName;
-            bool urlOk = latest.Url == expectedPath || (latest.Url.StartsWith("https://", StringComparison.Ordinal) && latest.Url.EndsWith(expectedPath, StringComparison.Ordinal) && latest.Url.IndexOf('/', 8) == latest.Url.Length - expectedPath.Length);
-            if (!urlOk)
+            string expectedPath = urlProblem(latest);
+            if (expectedPath != null)
             {
                 throw new InvalidDataException(name + ": url " + latest.Url + " is not this server's " + expectedPath);
             }
 
+            string exeName = payloadName(latest.Version);
             string srcExe = Path.Combine(srcDir, exeName);
             if (!File.Exists(srcExe))
             {
@@ -606,6 +661,18 @@ namespace LotR.Releases.Publishing
             if (exe.LongLength != latest.Size || Sha256Util.Of(exe) != latest.Sha256)
             {
                 throw new InvalidDataException(exeName + " does not match the signed " + name + " (size or SHA-256)");
+            }
+
+            if (payloadCheck != null)
+            {
+                try
+                {
+                    payloadCheck(exe, latest);
+                }
+                catch (InvalidDataException e)
+                {
+                    throw new InvalidDataException(exeName + ": " + e.Message);
+                }
             }
 
             var res = new UpdaterApplyResult { LatestFile = Path.Combine(updaterDir, name), Version = latest.Version, SignedBy = check.Message };
