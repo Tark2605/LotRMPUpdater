@@ -22,6 +22,14 @@ namespace Lotr.Updater.Core.Net
         public TimeSpan MaxDelay { get; set; } = TimeSpan.FromSeconds(60);
         /// <summary>Upper bound for a server-requested Retry-After (protects against absurd values).</summary>
         public TimeSpan MaxRetryAfter { get; set; } = TimeSpan.FromMinutes(10);
+        /// <summary>"Slow down" answers (429) are not failures and do not use <see cref="MaxAttempts"/>: a request gives up only
+        /// after this many of them in a row (at least <see cref="MinRateLimitWait"/> each, usually 10 s: several minutes).</summary>
+        public int MaxRateLimited { get; set; } = 60;
+        /// <summary>Shortest pause after a 429, even when Retry-After says 0:
+        /// retrying at once would only be told to slow down again.</summary>
+        public TimeSpan MinRateLimitWait { get; set; } = TimeSpan.FromSeconds(2);
+        /// <summary>Pause after a 429 without Retry-After.</summary>
+        public TimeSpan DefaultRateLimitWait { get; set; } = TimeSpan.FromSeconds(10);
         /// <summary>Injectable for tests.</summary>
         public Func<TimeSpan, CancellationToken, Task> Delay { get; set; } = (t, ct) => Task.Delay(t, ct);
 
@@ -34,6 +42,16 @@ namespace Lotr.Updater.Core.Net
             double jitter;
             lock (Rng) jitter = Rng.NextDouble();
             return TimeSpan.FromMilliseconds(ms * (0.5 + jitter * 0.5));
+        }
+
+        /// <summary>Pause after a 429: Retry-After (or <see cref="DefaultRateLimitWait"/>), kept between
+        /// <see cref="MinRateLimitWait"/> and <see cref="MaxRetryAfter"/>.</summary>
+        public TimeSpan RateLimitWait(TimeSpan? retryAfter)
+        {
+            var d = retryAfter ?? DefaultRateLimitWait;
+            if (d < MinRateLimitWait) d = MinRateLimitWait;
+            if (d > MaxRetryAfter) d = MaxRetryAfter;
+            return d;
         }
 
         public static TimeSpan? RetryAfterOf(HttpResponseMessage resp)
@@ -69,6 +87,22 @@ namespace Lotr.Updater.Core.Net
 
         public RetryPolicy Retry { get; }
         public HttpClient Client => _http;
+        /// <summary>Shared pace for every request of this fetcher (null: no pacing). See <see cref="RequestPacer"/>.</summary>
+        public RequestPacer Pacer { get; set; }
+
+        /// <summary>Waits for the pacer (if any) before a request.</summary>
+        private Task PaceAsync(CancellationToken ct) => Pacer?.WaitTurnAsync(ct) ?? Task.CompletedTask;
+
+        /// <summary>A 429: pauses every connection (through the pacer), logs once per pause, then waits here too.</summary>
+        private async Task SlowDownAsync(HttpResponseMessage resp, string what, int rateLimited, CancellationToken ct)
+        {
+            if (rateLimited > Retry.MaxRateLimited)
+                throw new HttpFetchException($"The server kept asking to slow down (429, {rateLimited - 1} times in a row): {what}. Try again in a few minutes; what was already downloaded is kept.", resp.StatusCode);
+            var d = Retry.RateLimitWait(RetryPolicy.RetryAfterOf(resp));
+            bool newPause = Pacer?.HoldOff(d) ?? true;
+            _log?.Write(newPause ? LogLevel.Warn : LogLevel.Detail, $"{what}: 429 Too Many Requests; all downloads pause {d.TotalSeconds:0.#} s");
+            await Retry.Delay(d, ct).ConfigureAwait(false);
+        }
 
         public static HttpClient CreateClient(string appVersion)
         {
@@ -85,12 +119,14 @@ namespace Lotr.Updater.Core.Net
         /// <summary>GET a small resource (channels.json, manifest, signature, chunk index). 404 returns null when allowed.</summary>
         public async Task<byte[]> GetBytesAsync(Uri uri, CancellationToken ct, bool allowNotFound = false, long maxBytes = 64L << 20)
         {
+            int rateLimited = 0;
             for (int attempt = 1; ; attempt++)
             {
                 TimeSpan? wait = null;
                 string why;
                 try
                 {
+                    await PaceAsync(ct).ConfigureAwait(false);
                     using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                     {
                         cts.CancelAfter(TimeSpan.FromSeconds(60));
@@ -104,6 +140,13 @@ namespace Lotr.Updater.Core.Net
                                 return await ReadLimitedAsync(resp.Content, maxBytes, uri, cts.Token).ConfigureAwait(false);
                             }
                             if (resp.StatusCode == HttpStatusCode.NotFound && allowNotFound) return null;
+                            if (resp.StatusCode == (HttpStatusCode)429)
+                            {
+                                await SlowDownAsync(resp, uri.AbsolutePath, ++rateLimited, ct).ConfigureAwait(false);
+                                attempt--; // a "slow down" is not a failed try
+                                continue;
+                            }
+                            rateLimited = 0;
                             if (!IsTransient(resp.StatusCode))
                                 throw new HttpFetchException($"The server answered {(int)resp.StatusCode} {resp.ReasonPhrase} for {uri.AbsolutePath}", resp.StatusCode);
                             wait = RetryPolicy.RetryAfterOf(resp);
@@ -165,6 +208,7 @@ namespace Lotr.Updater.Core.Net
         public async Task DownloadResumableAsync(Uri uri, string partPath, long expectedLength, Action<long> progress, CancellationToken ct)
         {
             int failures = 0;
+            int rateLimited = 0;
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
@@ -176,11 +220,18 @@ namespace Lotr.Updater.Core.Net
                 string why;
                 try
                 {
+                    await PaceAsync(ct).ConfigureAwait(false);
                     var req = new HttpRequestMessage(HttpMethod.Get, uri);
                     if (have > 0) req.Headers.Range = new RangeHeaderValue(have, null);
                     using (req)
                     using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
                     {
+                        if (resp.StatusCode == (HttpStatusCode)429)
+                        {
+                            await SlowDownAsync(resp, Path.GetFileName(partPath), ++rateLimited, ct).ConfigureAwait(false);
+                            continue; // not a failure: does not use the retry budget
+                        }
+                        rateLimited = 0;
                         if (resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.PartialContent)
                         {
                             bool append = false;

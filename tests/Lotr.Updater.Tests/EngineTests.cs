@@ -246,6 +246,42 @@ namespace Lotr.Updater.Tests
         }
 
         [Fact]
+        public async Task Slow_down_answers_do_not_use_the_retry_budget()
+        {
+            // A 429 can come with "Retry-After: 0": 12 of them (more than MaxAttempts = 8)
+            // must neither fail the install nor be retried at once.
+            using (var h = new Harness())
+            {
+                var r = Release1(h);
+                r.WriteTo(h.Releases);
+                var path = r.ObjectUrlPath(Dll1);
+                h.Server.Faults = (p, hit) => p == path && hit <= 12 ? new Fault { Status = 429, RetryAfterSeconds = 0 } : null;
+                var s = h.Service();
+                await CheckAndInstall(s);
+                Assert.Equal(Dll1, File.ReadAllBytes(h.ModuleFile("LotRMPEvent", "bin/Win64_Shipping_Client/OrderMiddleEarthEvent.dll")));
+                Assert.Equal(13, h.Server.Hits(path));
+                Assert.Equal(12, h.Delays.Count(d => d == TimeSpan.FromSeconds(2)));
+            }
+        }
+
+        [Fact]
+        public async Task Endless_slow_down_stops_with_a_clear_message()
+        {
+            using (var h = new Harness())
+            {
+                var r = Release1(h);
+                r.WriteTo(h.Releases);
+                var path = r.ObjectUrlPath(Dll1);
+                h.Server.Faults = (p, hit) => p == path ? new Fault { Status = 429, RetryAfterSeconds = 10 } : null;
+                var s = h.Service();
+                var c = await s.CheckAsync(null, CancellationToken.None);
+                var ex = await Assert.ThrowsAsync<InstallException>(() => s.InstallAsync(c.Plan, null, CancellationToken.None));
+                Assert.Contains("slow down", ex.Message);
+                Assert.Equal(61, h.Server.Hits(path));
+            }
+        }
+
+        [Fact]
         public async Task Core_download_waits_in_the_queue()
         {
             using (var h = new Harness())

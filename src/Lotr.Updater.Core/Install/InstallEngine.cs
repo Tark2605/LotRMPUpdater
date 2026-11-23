@@ -53,7 +53,8 @@ namespace Lotr.Updater.Core.Install
         public const int MaxConnections = 32;
         /// <summary>Default parallel HTTP connections. Measured 23 Nov 2026 against the live R2 release (objects not yet in the
         /// edge cache, ~140-190 ms per object): 6 = 9.6 MB/s, 8 = 12.4, 12 = 14.0, 16 = 17.5-22.8, 24 = 23.6, 32 = 26.0.
-        /// Past 24 the gain is small; below the player's line speed the count changes nothing.</summary>
+        /// Past 24 the gain is small; below the player's line speed the count changes nothing. Objects already in the
+        /// CDN cache come back much faster: the request rate is then held by <see cref="Net.RequestPacer"/>.</summary>
         public const int DefaultConnections = 24;
         /// <summary>Parallel HTTP connections (default <see cref="DefaultConnections"/>, capped at <see cref="MaxConnections"/>): the
         /// Core is ~45,000 small objects (FastCDC chunks, ~225 kB on average), so latency, not bandwidth, limits a single connection.</summary>

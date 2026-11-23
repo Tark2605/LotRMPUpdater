@@ -66,6 +66,9 @@ namespace Lotr.Updater.Core
             State = UpdaterState.Load(Paths.StateFile);
             Endpoints = new ServerEndpoints(config.BaseUrl);
             Fetcher = new HttpFetcher(http ?? HttpFetcher.CreateClient(config.AppVersion), Fs, Log, retry);
+            // One pace for all connections (the server limits the request rate); waits go through the retry policy's
+            // Delay so tests stay instant.
+            Fetcher.Pacer = new RequestPacer(RequestPacer.DefaultRequestsPerSecond) { Delay = (t, c) => Fetcher.Retry.Delay(t, c) };
             Source = new HttpReleaseSource(Endpoints, Fetcher);
             Store = new ObjectStore(Paths, Fs, Fetcher, Log);
             Hashes = new HashCache(Paths.HashCacheFile, Fs);

@@ -144,6 +144,8 @@ namespace Lotr.Updater.Core.Install
                           " Check that the folder is not read-only and that Windows Security \"Controlled folder access\" allows LotRMPUpdater, then try again."
                         : "Linux refused the updater access to a file in your game folder." + safe + " " + LinuxWriteAdvice + " Then try again.";
                 case ProblemKind.Network:
+                    if (IsSlowDown(ex))
+                        return "The LotR server kept asking the updater to slow down: too many downloads come from your internet address right now (another updater on the same network?). Nothing was changed in your game folder, and what was already downloaded is kept. Wait a few minutes, then try again.";
                     return "The download stopped because the LotR server could not be reached. Nothing was changed in your game folder, and what was already downloaded is kept. Check your internet connection and try again.";
                 case ProblemKind.ServerMissingFile:
                     return "A file of this update is not on the server yet (the team may be publishing right now). Nothing was changed in your game folder. Try again in a few minutes.";
@@ -152,6 +154,14 @@ namespace Lotr.Updater.Core.Install
                 default:
                     return "Something unexpected stopped the update." + safe + " Try again; if it happens again, send a report to the team.";
             }
+        }
+
+        /// <summary>The download gave up after too many 429 answers in a row (see <see cref="Net.RetryPolicy.MaxRateLimited"/>).</summary>
+        private static bool IsSlowDown(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+                if (e is Net.HttpFetchException h && h.Status == (System.Net.HttpStatusCode)429) return true;
+            return false;
         }
 
         private static FileLockedException FindLocked(Exception ex)
