@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using Lotr.Updater.Core.Install;
 
 namespace Lotr.Updater.Cli
 {
@@ -72,7 +73,7 @@ namespace Lotr.Updater.Cli
                     case "--connections":
                         var n = Next();
                         if (n == null) break;
-                        if (!int.TryParse(n, NumberStyles.Integer, CultureInfo.InvariantCulture, out var c) || c < 1 || c > 8) o.Error = "--connections takes a number from 1 to 8.";
+                        if (!int.TryParse(n, NumberStyles.Integer, CultureInfo.InvariantCulture, out var c) || c < 1 || c > EngineOptions.MaxConnections) o.Error = $"--connections takes a number from 1 to {EngineOptions.MaxConnections}.";
                         else o.Connections = c;
                         break;
                     case "--dev": o.Dev = true; break;
@@ -147,7 +148,7 @@ Options:
   --yes, -y         do not ask for confirmation
   --list            print every file of the plan
   --plain           progress as plain lines (no rewritten line)
-  --connections N   parallel downloads, 1 to 8 (default 6)
+  --connections N   parallel downloads, 1 to 32 (default 24)
   --accept-rollback install an OLDER release the team rolled back to (only when they announced it)
   --verbose, -v     print every log line
 

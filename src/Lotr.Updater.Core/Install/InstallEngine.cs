@@ -50,10 +50,14 @@ namespace Lotr.Updater.Core.Install
     public sealed class EngineOptions
     {
         /// <summary>Highest number of parallel HTTP connections (also the per-host limit set in <see cref="HttpFetcher.CreateClient"/>).</summary>
-        public const int MaxConnections = 8;
-        /// <summary>Parallel HTTP connections (default 6, capped at <see cref="MaxConnections"/>): the Core is ~38,000 small objects,
-        /// so latency, not bandwidth, limits a single connection.</summary>
-        public int Connections { get; set; } = 6;
+        public const int MaxConnections = 32;
+        /// <summary>Default parallel HTTP connections. Measured 23 Nov 2026 against the live R2 release (objects not yet in the
+        /// edge cache, ~140-190 ms per object): 6 = 9.6 MB/s, 8 = 12.4, 12 = 14.0, 16 = 17.5-22.8, 24 = 23.6, 32 = 26.0.
+        /// Past 24 the gain is small; below the player's line speed the count changes nothing.</summary>
+        public const int DefaultConnections = 24;
+        /// <summary>Parallel HTTP connections (default <see cref="DefaultConnections"/>, capped at <see cref="MaxConnections"/>): the
+        /// Core is ~45,000 small objects (FastCDC chunks, ~225 kB on average), so latency, not bandwidth, limits a single connection.</summary>
+        public int Connections { get; set; } = DefaultConnections;
         /// <summary>Free space kept on each drive on top of what the update needs.</summary>
         public long SafetyMarginBytes { get; set; } = 256L << 20;
         /// <summary>Waits between tries when a file is locked (antivirus scan, Explorer preview, Steam): a few short retries,

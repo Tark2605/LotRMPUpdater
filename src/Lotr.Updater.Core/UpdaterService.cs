@@ -31,7 +31,7 @@ namespace Lotr.Updater.Core
         public string FixedGamePath { get; set; }
         public List<string> TrustedKeysPem { get; } = new List<string>(TrustedKeys.Production);
         public bool AllowUnsigned { get; set; }
-        public int Connections { get; set; } = 6;
+        public int Connections { get; set; } = EngineOptions.DefaultConnections;
         /// <summary>Path of the running exe (self-update compares its Authenticode signer with the new one's).</summary>
         public string CurrentExe { get; set; }
     }

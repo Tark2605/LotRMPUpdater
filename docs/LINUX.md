@@ -97,7 +97,7 @@ working meanwhile. (It only believes a notice signed with the LotR team key, the
 | `./lotr-updater --help` | every option |
 
 Useful options: `--game <folder>` (the game folder, if it was not found; remembered), `--yes` (do not ask),
-`--list` (every file of the plan), `--plain` (simple progress lines), `--connections N` (1 to 8 parallel downloads).
+`--list` (every file of the plan), `--plain` (simple progress lines), `--connections N` (1 to 32 parallel downloads, 24 by default).
 
 Exit codes, for scripts: 0 ok, 1 game not found, 2 wrong command line, 3 server or network problem, 4 release refused
 (bad signature or older release), 5 install failed, 6 verify found differences, 7 game running, 8 downloads paused by

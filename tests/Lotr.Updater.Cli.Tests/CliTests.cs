@@ -490,7 +490,8 @@ namespace Lotr.Updater.Cli.Tests
         [InlineData("frobnicate")]
         [InlineData("--frobnicate")]
         [InlineData("install", "verify")]
-        [InlineData("install", "--connections", "9")]
+        [InlineData("install", "--connections", "33")]
+        [InlineData("install", "--connections", "0")]
         [InlineData("install", "--connections")]
         [InlineData("install", "--channel", "Beta!")]
         [InlineData("install", "--server", "http://localhost:1/")]                 // dev option without --dev
